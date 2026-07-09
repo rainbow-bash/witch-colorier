@@ -31,22 +31,34 @@ import "core:fmt"
 import "core:math/linalg"
 import rl "vendor:raylib"
 
-PIXEL_WINDOW_HEIGHT :: 320
+PIXEL_WINDOW_HEIGHT :: 128
+PIXEL_WINDOW_WIDTH :: PIXEL_WINDOW_HEIGHT
+TILE_SIZE :: 16
+TILE_COLS :: PIXEL_WINDOW_WIDTH / TILE_SIZE
 
 Game_Memory :: struct {
 	player_pos:     rl.Vector2,
 	player_texture: rl.Texture,
 	some_number:    int,
 	run:            bool,
+	blocks:         [TILE_COLS * 6]rl.Rectangle,
+	zoom:           f32,
 }
 
 g: ^Game_Memory
+
 
 game_camera :: proc() -> rl.Camera2D {
 	w := f32(rl.GetScreenWidth())
 	h := f32(rl.GetScreenHeight())
 
-	return {zoom = h / PIXEL_WINDOW_HEIGHT, target = g.player_pos, offset = {w / 2, h / 2}}
+	fmt.println(g.zoom)
+	return {
+		zoom   = (h / PIXEL_WINDOW_HEIGHT) + g.zoom,
+		// zoom   = 4,
+		target = g.player_pos,
+		offset = {w / 2, h / 2},
+	}
 }
 
 ui_camera :: proc() -> rl.Camera2D {
@@ -65,8 +77,21 @@ update :: proc() {
 	if rl.IsKeyDown(.LEFT) || rl.IsKeyDown(.A) {
 		input.x -= 1
 	}
+
 	if rl.IsKeyDown(.RIGHT) || rl.IsKeyDown(.D) {
 		input.x += 1
+	}
+
+	if rl.GetMouseWheelMove() != 0 {
+		y := rl.GetMouseWheelMove()
+		g.zoom += y
+		fmt.println(y)
+	}
+
+	if rl.IsMouseButtonDown(.LEFT) {
+		// pos := rl.GetScreenToWorld2D(rl.GetMousePosition(), game_camera())
+		pos := rl.GetMouseDelta()
+		g.player_pos += -pos
 	}
 
 	input = linalg.normalize0(input)
@@ -78,13 +103,22 @@ update :: proc() {
 	}
 }
 
+render :: proc() {
+	rl.DrawTextureEx(g.player_texture, {0, 0}, 0, 1, rl.RED)
+	rl.DrawRectangle(0, 0, 20, 20, rl.RED)
+	for b in g.blocks {
+		rl.DrawRectangleRec(b, rl.GREEN)
+	}
+	rl.DrawRectangle(0, 0, PIXEL_WINDOW_HEIGHT, 20, rl.BLUE)
+}
+
 draw :: proc() {
 	rl.BeginDrawing()
 	rl.ClearBackground(rl.DARKGRAY)
 
 
 	rl.BeginMode2D(game_camera())
-	rl.DrawTextureEx(g.player_texture, g.player_pos, 0, 1, rl.WHITE)
+	render()
 	rl.EndMode2D()
 
 	// NOTE: `fmt.ctprintf` uses the temp allocator. The temp allocator is
@@ -93,13 +127,7 @@ draw :: proc() {
 
 	rl.BeginMode2D(ui_camera())
 	{
-		rl.DrawText(
-			fmt.ctprintf("sdf: %v\nplayer_pos: %v", g.some_number, g.player_pos),
-			5,
-			5,
-			8,
-			rl.WHITE,
-		)
+		rl.DrawText(fmt.ctprintf("player_pos: %v", g.player_pos), 5, 5, 8, rl.WHITE)
 	}
 	rl.EndMode2D()
 
@@ -135,6 +163,7 @@ game_init :: proc() {
 		// You can put textures, sounds and music in the `assets` folder. Those
 		// files will be part any release or web build.
 		player_texture = rl.LoadTexture("assets/witch.png"),
+		zoom           = 1,
 	}
 
 	game_hot_reloaded(g)
@@ -175,6 +204,14 @@ game_memory_size :: proc() -> int {
 @(export)
 game_hot_reloaded :: proc(mem: rawptr) {
 	g = (^Game_Memory)(mem)
+	for &b, i in g.blocks {
+		b = rl.Rectangle {
+			x      = f32(i / TILE_COLS) * TILE_SIZE,
+			y      = f32(i / TILE_COLS) * TILE_SIZE,
+			height = TILE_SIZE,
+			width  = TILE_SIZE,
+		}
+	}
 
 	// Here you can also set your own global variables. A good idea is to make
 	// your global variables into pointers that point to something inside `g`.
