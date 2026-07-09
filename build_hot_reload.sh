@@ -33,7 +33,6 @@ esac
 
 # Build the game. Note that the game goes into $OUT_DIR while the exe stays in
 # the root folder.
-echo "Building game$DLL_EXT"
 odin build source -extra-linker-flags:"$EXTRA_LINKER_FLAGS" -define:RAYLIB_SHARED=true -build-mode:dll -out:$OUT_DIR/game_tmp$DLL_EXT -strict-style -vet -debug -error-pos-style:unix
 
 # Need to use a temp file on Linux because it first writes an empty `game.so`,
@@ -43,11 +42,9 @@ mv $OUT_DIR/game_tmp$DLL_EXT $OUT_DIR/game$DLL_EXT
 # If the executable is already running, then don't try to build and start it.
 # -f is there to make sure we match against full name, including .bin
 if pgrep -f $EXE > /dev/null; then
-    echo "Hot reloading..."
     exit 0
 fi
 
-echo "Building $EXE"
 odin build source/main_hot_reload -out:$EXE -strict-style -vet -debug -error-pos-style:unix
 
 if [ $# -ge 1 ] && [ $1 == "run" ]; then

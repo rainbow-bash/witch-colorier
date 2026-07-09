@@ -31,7 +31,7 @@ import "core:fmt"
 import "core:math/linalg"
 import rl "vendor:raylib"
 
-PIXEL_WINDOW_HEIGHT :: 720
+PIXEL_WINDOW_HEIGHT :: 320
 
 Game_Memory :: struct {
 	player_pos:     rl.Vector2,
@@ -82,21 +82,25 @@ draw :: proc() {
 	rl.BeginDrawing()
 	rl.ClearBackground(rl.DARKGRAY)
 
-	rl.DrawTextureEx(g.player_texture, g.player_pos, 0, 1, rl.WHITE)
 
-	rl.BeginMode2D(ui_camera())
+	rl.BeginMode2D(game_camera())
+	rl.DrawTextureEx(g.player_texture, g.player_pos, 0, 1, rl.WHITE)
+	rl.EndMode2D()
 
 	// NOTE: `fmt.ctprintf` uses the temp allocator. The temp allocator is
 	// cleared at the end of the frame by the main application, meaning inside
 	// `main_hot_reload.odin`, `main_release.odin` or `main_web_entry.odin`.
-	rl.DrawText(
-		fmt.ctprintf("sdf: %v\nplayer_pos: %v", g.some_number, g.player_pos),
-		5,
-		5,
-		8,
-		rl.WHITE,
-	)
 
+	rl.BeginMode2D(ui_camera())
+	{
+		rl.DrawText(
+			fmt.ctprintf("sdf: %v\nplayer_pos: %v", g.some_number, g.player_pos),
+			5,
+			5,
+			8,
+			rl.WHITE,
+		)
+	}
 	rl.EndMode2D()
 
 	rl.EndDrawing()
@@ -130,7 +134,7 @@ game_init :: proc() {
 
 		// You can put textures, sounds and music in the `assets` folder. Those
 		// files will be part any release or web build.
-		player_texture = rl.LoadTexture("assets/round_cat.png"),
+		player_texture = rl.LoadTexture("assets/witch.png"),
 	}
 
 	game_hot_reloaded(g)

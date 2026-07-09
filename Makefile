@@ -1,2 +1,2 @@
 compile:
-	./build_hot_reload.sh
+	@./build_hot_reload.sh
