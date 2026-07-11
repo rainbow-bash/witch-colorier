@@ -327,13 +327,14 @@ render_debug :: proc() {
 
 render_ui :: proc() {
 
-	y := 20
-	health_width := ((g.player.health * HEALTH_BAR_WIDTH) / g.player.max_health)
-	debug("%#v", health_width)
+	{
+		y := 0
+		health_width := ((g.player.health * HEALTH_BAR_WIDTH) / g.player.max_health)
+		draw_rect(0, y, HEALTH_BAR_WIDTH, 10, hexcode_to_color(0x2c2933))
+		draw_rect(0, y, health_width, 10, hexcode_to_color(0xc8abd0))
+		draw_text(fmt.aprintf("0x%X", g.player.health), 0, y, 12, rl.WHITE)
+	}
 
-	draw_rect(0, y, HEALTH_BAR_WIDTH, 10, hexcode_to_color(0x2c2933))
-	draw_rect(0, y, health_width, 10, hexcode_to_color(0xc8abd0))
-	draw_text(fmt.aprintf("0x%X", g.player.health), 0, y, 12, rl.WHITE)
 	entity_draw_rects(g.player.entity)
 }
 
