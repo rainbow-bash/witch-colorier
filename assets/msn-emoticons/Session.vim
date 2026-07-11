@@ -2,47 +2,21 @@ let SessionLoad = 1
 let s:so_save = &g:so | let s:siso_save = &g:siso | setg so=0 siso=0 | setl so=-1 siso=-1
 let v:this_session=expand("<sfile>:p")
 doautoall SessionLoadPre
-let VM_case_setting = ""
-let VM_disable_syntax_in_imode =  0 
-let VM_check_mappings =  1 
 let VM_mouse_mappings =  0 
-let VM_debug =  0 
+let VM_check_mappings =  1 
 let VM_default_mappings =  1 
 let VM_persistent_registers =  0 
-let VM_live_editing =  1 
-let VM_use_python =  0 
-let VM_reselect_first =  0 
 let VM_highlight_matches = "underline"
-let VM_use_first_cursor_in_line =  0 
 silent only
 silent tabonly
-cd ~/Documents/projects/games/witch-colorier
+cd ~/Documents/projects/games/witch-colorier/assets/msn-emoticons
 if expand('%') == '' && !&modified && line('$') <= 1 && getline(1) == ''
   let s:wipebuf = bufnr('%')
 endif
 let s:shortmess_save = &shortmess
 set shortmess+=aoO
-badd +1 source/animation/animation.odin
 argglobal
 %argdel
-edit source/animation/animation.odin
-argglobal
-setlocal foldmethod=manual
-setlocal foldexpr=0
-setlocal foldmarker={{{,}}}
-setlocal foldignore=#
-setlocal foldlevel=0
-setlocal foldminlines=1
-setlocal foldnestmax=20
-setlocal foldenable
-silent! normal! zE
-let &fdl = &fdl
-let s:l = 1 - ((0 * winheight(0) + 25) / 50)
-if s:l < 1 | let s:l = 1 | endif
-keepjumps exe s:l
-normal! zt
-keepjumps 1
-normal! 017|
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0 && getbufvar(s:wipebuf, '&buftype') isnot# 'terminal'
   silent exe 'bwipe ' . s:wipebuf

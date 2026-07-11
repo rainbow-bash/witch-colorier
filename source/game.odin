@@ -27,18 +27,27 @@ created.
 
 package game
 
+import "./animations"
 import "core:fmt"
 import "core:math/linalg"
 import "core:strings"
+import "core:time"
 import rl "vendor:raylib"
 
 WINDOW_HEIGHT :: 720
+HEALTH_BAR_WIDTH :: 64
+HEALTH_MAX :: 0xFF
 WINDOW_WIDTH :: WINDOW_HEIGHT
+
+COLLISION_SCALE :: 0.5
+PARRY_SCALE :: 1.2
 
 PIXEL_WINDOW_HEIGHT :: 128
 PIXEL_WINDOW_WIDTH :: PIXEL_WINDOW_HEIGHT
 TILE_SIZE :: 16
 TILE_COLS :: PIXEL_WINDOW_WIDTH / TILE_SIZE
+PROJECTILE_DEATH_DURATION :: 100
+
 
 Hex :: struct {
 	red:   u8,
@@ -47,23 +56,118 @@ Hex :: struct {
 	alpha: u8,
 }
 
-hex_to_color :: proc(h: Hex) -> rl.Color {
-	return {h.red, h.green, h.blue, 255}
+hex_to_color :: proc(h: Hex, alpha: u8 = 255) -> rl.Color {
+	return {h.red, h.green, h.blue, alpha}
+}
+
+hexcode_to_color :: proc(hex: int) -> rl.Color {
+	a: u8 = 0xFF
+	r: u8 = u8(hex >> (8 * 2) & 0xFF)
+	g: u8 = u8(hex >> (8 * 1) & 0xFF)
+	b: u8 = u8(hex >> (8 * 0) & 0xFF)
+
+	return rl.Color {
+		u8(r), //
+		u8(g), //
+		u8(b), //
+		u8(a), //
+	}
+}
+
+Dead :: enum {
+	NIL,
+	STARTING,
+	ENDED,
+}
+
+Death :: struct {
+	start:          time.Time,
+	phase:          Dead,
+	death_duration: time.Duration,
+}
+
+EntityAnimation :: struct {
+	using animation: animations.Animation,
+	texture:         rl.Texture,
+	frame_width:     f32,
+	frame_heigth:    f32,
+}
+
+EntityAnimations :: struct {
+	idle:    EntityAnimation,
+	running: EntityAnimation,
+	dying:   EntityAnimation,
+	emote:   EntityAnimation,
 }
 
 Entity :: struct {
 	rect:            rl.Rectangle,
+	collision_rect:  rl.Rectangle,
+	parry_rect:      rl.Rectangle,
 	auto_speed:      rl.Vector2,
 	textures:        []rl.Texture,
+	animations:      EntityAnimations,
 	base_texture:    rl.Texture,
 	dying_animation: []rl.Texture,
-	health:          i8,
+	health:          int,
+	max_health:      int,
 	collided_with:   ^Entity,
+	death:           Death,
+	scale:           f32,
+}
+
+Entity_Rectangles :: struct {
+	base:      rl.Rectangle,
+	collision: rl.Rectangle,
+	parry:     rl.Rectangle,
+}
+
+entity_generate_rectangles :: proc(pos: rl.Vector2, width: f32, height: f32) -> Entity_Rectangles {
+	x := pos.x
+	y := pos.y
+
+	col_w := width * COLLISION_SCALE
+	col_h := height * COLLISION_SCALE
+	col_x := width / 2 - col_w / 2
+	col_y := height / 2 - col_h / 2
+
+	par_w := width * PARRY_SCALE
+	par_h := height * PARRY_SCALE
+	par_x := width / 2 - par_w / 2
+	par_y := height / 2 - par_h / 2
+
+	return {
+		base = {x, y, width, height},
+		collision = {col_x, col_y, col_w, col_h},
+		parry = {par_x, par_y, par_w, par_h},
+	}
+
 }
 
 entity_get_position :: proc(entity: Entity) -> rl.Vector2 {
 	return {entity.rect.x, entity.rect.y}
 }
+
+entity_draw_rects :: proc(entity: Entity) {
+	rl.DrawRectangleLinesEx(entity.collision_rect, 0.8, rl.RED)
+	rl.DrawRectangleLinesEx(entity.rect, 0.8, rl.GREEN)
+	rl.DrawRectangleLinesEx(entity.parry_rect, 0.8, rl.BLUE)
+}
+
+entity_update_position :: proc(entity: ^Entity, input: rl.Vector2) {
+	movement := (input * rl.GetFrameTime() * 50)
+
+	x := movement.x
+	y := movement.y
+
+	entity.rect.x += x
+	entity.rect.y += y
+	entity.collision_rect.x += x
+	entity.collision_rect.y += y
+	entity.parry_rect.x += x
+	entity.parry_rect.y += y
+}
+
 
 entity_set_position :: proc(entity: ^Entity, pos: rl.Vector2) {
 	entity.rect.x = pos.x
@@ -71,15 +175,20 @@ entity_set_position :: proc(entity: ^Entity, pos: rl.Vector2) {
 }
 
 entity_is_colliding_with :: proc(this, that: Entity) -> bool {
-	return rl.CheckCollisionRecs(this.rect, that.rect)
+	return rl.CheckCollisionRecs(this.collision_rect, that.collision_rect)
+}
+
+entity_is_parrying_with :: proc(this, that: Entity) -> bool {
+	return rl.CheckCollisionRecs(this.parry_rect, that.parry_rect)
 }
 
 Player :: struct {
-	using entity: Entity,
-	hex_channels: [6]Hex,
-	texture:      rl.Texture,
-	is_being_hit: bool,
-	is_parrying:  bool,
+	using entity:        Entity,
+	hex_channels:        [6]Hex,
+	texture:             rl.Texture,
+	is_being_hit:        bool,
+	is_parrying:         bool,
+	time_since_last_hit: time.Time,
 }
 
 Debug :: struct {
@@ -96,6 +205,9 @@ Projectile :: struct {
 	rotation:     f32,
 }
 
+game_parry_projectile :: proc() {
+}
+
 new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 	// position := rl.GetScreenToWorld2D({f32(rand.int63()), f32(rand.int63())})
 	// w := f32(rl.GetScreenWidth())
@@ -103,6 +215,12 @@ new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 	position.x += f32(texture.width) * 2.0
 	position.y += f32(texture.height * i32(i))
 	debug_persistent("%#v: %#v", i, position)
+	scale: f32 = 0.5
+
+	x := position.x
+	y := position.y
+	height := f32(f32(texture.height) * scale)
+	width := f32(f32(texture.width) * scale)
 
 	return {
 		rect = {
@@ -111,15 +229,19 @@ new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 			height = f32(texture.height),
 			width = f32(texture.width),
 		},
+		collision_rect = {x, y, width, height},
+		parry_rect = {x, y, width * 1.5, height * 1.5},
+		death = {death_duration = time.Millisecond * PROJECTILE_DEATH_DURATION},
 		health = 1,
-		hex = {red = 200},
+		scale = scale,
+		hex = {255, 255, 255, 255},
 		auto_speed = 0.15,
 		base_texture = texture,
 	}
 }
 
 Game_Memory :: struct {
-	debug:         Debug,
+	debug:         ^Debug,
 	is_debug_mode: bool,
 	is_paused:     bool,
 	player:        Player,
@@ -164,7 +286,7 @@ screen_center :: proc() -> rl.Vector2 {
 }
 
 debug :: proc(format: string, args: ..any) {
-	append(&d.messages, fmt.aprintf(format, ..args))
+	append(&g.debug.messages, fmt.aprintf(format, ..args))
 }
 
 debug_persistent :: proc(format: string, args: ..any) {
@@ -175,37 +297,54 @@ ui_camera :: proc() -> rl.Camera2D {
 	return {zoom = f32(rl.GetScreenHeight()) / PIXEL_WINDOW_HEIGHT / 2}
 }
 
+draw_text :: proc(text: string, pos_x, pos_y: int, font_size: int, color: rl.Color) {
+	txt := strings.clone_to_cstring(text)
+	rl.DrawText(txt, i32(pos_x), i32(pos_y), i32(font_size), color)
+}
+
+draw_rect :: proc(pos_x, pos_y: int, width: int, height: int, color: rl.Color) {
+	rl.DrawRectangle(i32(pos_x), i32(pos_y), i32(width), i32(height), color)
+}
+
 render_debug_f3 :: proc() {
 	{
 		msg := strings.join(g.debug.messages[:], "\n")
 		txt := strings.clone_to_cstring(msg)
 		rl.DrawText(txt, 0, 0, 1, rl.WHITE)
 	}
-	{
-		msg := strings.join(d.persistent_messages[:], "\n")
-		txt := strings.clone_to_cstring(msg)
-		x: i32 = 230
-		rl.DrawText(txt, x, 0, 1, rl.WHITE)
-	}
+	// {
+	// 	msg := strings.join(d.persistent_messages[:], "\n")
+	// 	txt := strings.clone_to_cstring(msg)
+	// 	x: i32 = 230
+	// 	rl.DrawText(txt, x, 0, 1, rl.WHITE)
+	// }
 }
 
 render_debug :: proc() {
-	rl.DrawRectangleLinesEx(
-		{
-			x = g.player.rect.x,
-			y = g.player.rect.y,
-			width = f32(g.player.texture.width),
-			height = f32(g.player.texture.height),
-		},
-		0.8,
-		rl.PURPLE,
-	)
+	entity_draw_rects(g.player.entity)
+}
+
+
+render_ui :: proc() {
+
+	y := 20
+	health_width := ((g.player.health * HEALTH_BAR_WIDTH) / g.player.max_health)
+	debug("%#v", health_width)
+
+	draw_rect(0, y, HEALTH_BAR_WIDTH, 10, hexcode_to_color(0x2c2933))
+	draw_rect(0, y, health_width, 10, hexcode_to_color(0xc8abd0))
+	draw_text(fmt.aprintf("0x%X", g.player.health), 0, y, 12, rl.WHITE)
+	entity_draw_rects(g.player.entity)
 }
 
 update_debug :: proc() {
 	mouse := rl.GetScreenToWorld2D(rl.GetMousePosition(), game_camera())
 	if rl.IsKeyDown(.R) {
 		reset_memory()
+	}
+
+	if rl.IsKeyPressed(.K) {
+		g.player.health -= 1
 	}
 
 	if rl.GetMouseWheelMove() != 0 {
@@ -244,14 +383,16 @@ update_debug :: proc() {
 
 update :: proc() {
 	update_debug()
+	animations.update(&g.player.animations.idle.animation)
 	if rl.IsKeyPressed(.LEFT_ALT) {
 		// g.is_paused = !g.is_paused
 		g.is_debug_mode = !g.is_debug_mode
 	}
 
-	if g.is_paused || g.is_debug_mode {
+	if g.is_paused {
 		return
 	}
+
 
 	for &p in g.projectiles {
 		// p.rotation += 1
@@ -261,27 +402,34 @@ update :: proc() {
 	}
 
 	colliding_entity: ^Entity
+
 	for &p in g.projectiles {
+		if g.player.collided_with == &p {
+			continue
+		}
 		if (entity_is_colliding_with(g.player.entity, p.entity)) {
 			g.player.health -= 1
 			g.player.is_being_hit = true
 			colliding_entity = &p
 			g.player.collided_with = &p
+			g.player.time_since_last_hit = time.now()
 			break
 		} else {
 			g.player.is_being_hit = false
 		}
 	}
 
-	if colliding_entity != nil && rl.IsKeyPressed(.SPACE) {
+	delta := time.diff(g.player.time_since_last_hit, time.now()) * time.Millisecond
+
+	if delta < 500 * time.Millisecond && colliding_entity != nil && rl.IsKeyPressed(.SPACE) {
+		g.player.collided_with.death.start = time.now()
+		g.player.collided_with.death.phase = .STARTING
 		g.player.is_parrying = true
 	}
 
 	if colliding_entity == nil && g.player.is_parrying {
 		g.player.is_parrying = false
 	}
-
-	debug("%v", g.player.health)
 
 	// g.camera_pos += {g.camera_speed, 0}
 	// g.player.rect.x += g.player.auto_speed.x
@@ -308,8 +456,9 @@ update :: proc() {
 
 
 	input = linalg.normalize0(input)
-	g.player.rect.x += (input * rl.GetFrameTime() * 100).x
-	g.player.rect.y += (input * rl.GetFrameTime() * 100).y
+	entity_update_position(&g.player.entity, input)
+	// g.player.rect.x += (input * rl.GetFrameTime() * 50).x
+	// g.player.rect.y += (input * rl.GetFrameTime() * 50).y
 
 }
 
@@ -319,19 +468,38 @@ render :: proc() {
 		rl.DrawRectangleV(b, {f32(TILE_SIZE), f32(TILE_SIZE)}, rl.GREEN)
 	}
 	rl.DrawRectangle(0, 0, PIXEL_WINDOW_HEIGHT, 20, rl.BLUE)
-	rl.DrawTextureEx(g.player.texture, get_player_pos(), 0, 1, rl.WHITE)
+	rl.DrawTexturePro(
+		g.player.animations.idle.texture,
+		animations.frame(&g.player.animations.idle.animation, 6),
+		g.player.rect,
+		{0, 0},
+		0,
+		rl.WHITE,
+	)
 	for p in g.projectiles {
+		alpha: u8 = 0
+		switch (p.death.phase) {
+		case .ENDED:
+			continue
+		case .NIL:
+			alpha = 255
+		case .STARTING:
+			since := time.since(p.death.start)
+			remaining := u8(p.death.death_duration - since)
+			alpha = remaining
+		}
+
 		rl.DrawTextureEx(
 			p.base_texture,
 			entity_get_position(p.entity),
 			p.rotation,
-			1,
-			hex_to_color(p.hex),
+			p.scale,
+			hex_to_color(p.hex, alpha),
 		)
 	}
+
 	if g.player.is_being_hit {
 		rl.ClearBackground(rl.RED)
-		rl.DrawRectangle(0, 0, 20, 20, rl.RED)
 	}
 	if g.player.is_parrying {
 		rl.DrawRectangleV(get_player_pos(), {20, 20}, rl.PURPLE)
@@ -356,9 +524,10 @@ draw :: proc() {
 
 	rl.BeginMode2D(ui_camera())
 	{
-		if g.is_debug_mode {
-			render_debug_f3()
-		}
+		render_ui()
+		// if g.is_debug_mode {
+		// }
+		render_debug_f3()
 	}
 	rl.EndMode2D()
 
@@ -382,7 +551,7 @@ game_update :: proc() {
 
 @(export)
 game_init_window :: proc() {
-	rl.SetConfigFlags({.VSYNC_HINT})
+	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
 	rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Odin + Raylib + Hot Reload template!")
 	rl.SetWindowPosition(200, 200)
 	rl.SetTargetFPS(500)
@@ -394,32 +563,54 @@ game_init :: proc() {
 	g = new(Game_Memory)
 
 	player_texture := rl.LoadTexture("assets/witch.png")
-	projectile_texture := rl.LoadTexture("assets/tv.png")
+	projectile_texture := rl.LoadTexture("assets/computer.png")
+	player_idle_texture_atlas := rl.LoadTexture("assets/twi.png")
 	center := screen_center()
 
+	width := f32(player_texture.width)
+	height := f32(player_texture.height)
+
+	rects := entity_generate_rectangles(center, width, height)
+
 	player: Player = {
-		rect         = {center.x, center.y, f32(player_texture.width), f32(player_texture.height)},
-		auto_speed   = {0.12, 0},
+		rect = rects.base,
+		collision_rect = rects.collision,
+		parry_rect = rects.parry,
+		auto_speed = {0.12, 0},
 		hex_channels = {},
-		health       = 0xA,
-		texture      = player_texture,
+		health = 0xF,
+		max_health = 0xF,
+		texture = player_texture,
+		animations = {
+			idle = {
+				animation = {
+					//
+					duration      = 0.15,
+					duration_left = 0.15,
+					current       = 0,
+					last          = 2,
+				},
+				texture = player_idle_texture_atlas,
+			},
+		},
 	}
 
 
 	g^ = Game_Memory {
-		debug        = d,
-		player       = player,
-		run          = true,
-		some_number  = 100,
-		projectiles  = {
+		is_debug_mode = true,
+		debug         = &d,
+		player        = player,
+		run           = true,
+		some_number   = 100,
+		projectiles   = {
 			new_random_projectile(projectile_texture, 0),
 			new_random_projectile(projectile_texture, 1),
 			new_random_projectile(projectile_texture, 2),
 		},
 		// You can put textures, sounds and music in the `assets` folder. Those
 		// files will be part any release or web build.
-		zoom         = 1,
-		camera_speed = 0.1,
+		zoom          = 1,
+		camera_speed  = 0.1,
 	}
 
 	game_hot_reloaded(g)
@@ -460,9 +651,6 @@ game_memory_size :: proc() -> int {
 @(export)
 game_hot_reloaded :: proc(mem: rawptr) {
 	g = (^Game_Memory)(mem)
-	for &o, i in g.obstacles {
-		o = rl.Vector2{f32(i * TILE_SIZE), f32(i * TILE_SIZE)}
-	}
 	// Here you can also set your own global variables. A good idea is to make
 	// your global variables into pointers that point to something inside `g`.
 }
