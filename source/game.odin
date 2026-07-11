@@ -45,6 +45,8 @@ PARRY_SCALE :: 1.2
 PIXEL_WINDOW_HEIGHT :: 128
 PIXEL_WINDOW_WIDTH :: PIXEL_WINDOW_HEIGHT
 TILE_SIZE :: 16
+HEX_SQUARE_WIDTH :: TILE_SIZE * 2
+HEX_SQUARE_HEIGHT :: TILE_SIZE
 TILE_COLS :: PIXEL_WINDOW_WIDTH / TILE_SIZE
 PROJECTILE_DEATH_DURATION :: 100
 
@@ -184,7 +186,7 @@ entity_is_parrying_with :: proc(this, that: Entity) -> bool {
 
 Player :: struct {
 	using entity:        Entity,
-	hex_channels:        [6]Hex,
+	hex_channels:        [1]Hex,
 	texture:             rl.Texture,
 	is_being_hit:        bool,
 	is_parrying:         bool,
@@ -325,17 +327,37 @@ render_debug :: proc() {
 }
 
 
+// TODO: make an ui context where the ui elements are stacked,
+//			 and everytime a rectangle is drawn add the height (column) or width (row) of that shape, so the next y or x in the current context gets updated to that
 render_ui :: proc() {
 
+	y := 0
 	{
-		y := 0
 		health_width := ((g.player.health * HEALTH_BAR_WIDTH) / g.player.max_health)
 		draw_rect(0, y, HEALTH_BAR_WIDTH, 10, hexcode_to_color(0x2c2933))
 		draw_rect(0, y, health_width, 10, hexcode_to_color(0xc8abd0))
 		draw_text(fmt.aprintf("0x%X", g.player.health), 0, y, 12, rl.WHITE)
+		y += TILE_SIZE
 	}
+	{
+		for hex, _ in g.player.hex_channels {
+			x := 0 * HEX_SQUARE_WIDTH
+			draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {hex.red, 0, 0, 255})
+			draw_text(fmt.aprintf("0x%2X", hex.red), x, y, 1, rl.WHITE)
 
-	entity_draw_rects(g.player.entity)
+			x = 1 * HEX_SQUARE_WIDTH
+			draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {0, hex.green, 0, 255})
+			draw_text(fmt.aprintf("0x%2X", hex.green), x, y, 1, rl.WHITE)
+
+			x = 2 * HEX_SQUARE_WIDTH
+			draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {0, 0, hex.blue, 255})
+			draw_text(fmt.aprintf("0x%2X", hex.blue), x, y, 1, rl.WHITE)
+			y += HEX_SQUARE_HEIGHT + 1
+			x = 0 * HEX_SQUARE_WIDTH
+			draw_rect(x, y, HEX_SQUARE_WIDTH * 3, HEX_SQUARE_HEIGHT, hex_to_color(hex))
+			draw_text(fmt.aprintf("0x%2X%2X%2X", hex.red, hex.green, hex.blue), x, y, 1, rl.WHITE)
+		}
+	}
 }
 
 update_debug :: proc() {
@@ -578,7 +600,7 @@ game_init :: proc() {
 		collision_rect = rects.collision,
 		parry_rect = rects.parry,
 		auto_speed = {0.12, 0},
-		hex_channels = {},
+		hex_channels = {{red = 255, green = 125, blue = 0, alpha = 0}},
 		health = 0xF,
 		max_health = 0xF,
 		texture = player_texture,
