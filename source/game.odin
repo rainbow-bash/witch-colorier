@@ -177,6 +177,7 @@ entity_set_position :: proc(entity: ^Entity, pos: rl.Vector2) {
 }
 
 entity_is_colliding_with :: proc(this, that: Entity) -> bool {
+	d
 	return rl.CheckCollisionRecs(this.collision_rect, that.collision_rect)
 }
 
@@ -216,23 +217,16 @@ new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 	position: rl.Vector2 = get_player_pos()
 	position.x += f32(texture.width) * 2.0
 	position.y += f32(texture.height * i32(i))
-	debug_persistent("%#v: %#v", i, position)
 	scale: f32 = 0.5
 
-	x := position.x
-	y := position.y
 	height := f32(f32(texture.height) * scale)
 	width := f32(f32(texture.width) * scale)
+	rects := entity_generate_rectangles(position, width, height)
 
 	return {
-		rect = {
-			x = position.x,
-			y = position.y,
-			height = f32(texture.height),
-			width = f32(texture.width),
-		},
-		collision_rect = {x, y, width, height},
-		parry_rect = {x, y, width * 1.5, height * 1.5},
+		rect = rects.base,
+		collision_rect = rects.collision,
+		parry_rect = rects.parry,
 		death = {death_duration = time.Millisecond * PROJECTILE_DEATH_DURATION},
 		health = 1,
 		scale = scale,
@@ -291,6 +285,12 @@ debug :: proc(format: string, args: ..any) {
 	append(&g.debug.messages, fmt.aprintf(format, ..args))
 }
 
+debug_once :: proc(format: string, args: ..any) {
+	if len(g.debug.messages) == 0 {
+		debug(format, ..args)
+	}
+}
+
 debug_persistent :: proc(format: string, args: ..any) {
 	append(&d.persistent_messages, fmt.aprintf(format, ..args))
 }
@@ -324,6 +324,9 @@ render_debug_f3 :: proc() {
 
 render_debug :: proc() {
 	entity_draw_rects(g.player.entity)
+	for p in g.projectiles {
+		entity_draw_rects(p.entity)
+	}
 }
 
 
@@ -331,12 +334,12 @@ render_debug :: proc() {
 //			 and everytime a rectangle is drawn add the height (column) or width (row) of that shape, so the next y or x in the current context gets updated to that
 render_ui :: proc() {
 
-	y := 0
+	y := 208
 	{
 		health_width := ((g.player.health * HEALTH_BAR_WIDTH) / g.player.max_health)
 		draw_rect(0, y, HEALTH_BAR_WIDTH, 10, hexcode_to_color(0x2c2933))
 		draw_rect(0, y, health_width, 10, hexcode_to_color(0xc8abd0))
-		draw_text(fmt.aprintf("0x%X", g.player.health), 0, y, 12, rl.WHITE)
+		draw_text(fmt.aprintf("0x%2X", g.player.health), 0, y, 12, rl.WHITE)
 		y += TILE_SIZE
 	}
 	{
@@ -417,13 +420,6 @@ update :: proc() {
 	}
 
 
-	for &p in g.projectiles {
-		// p.rotation += 1
-		pos := entity_get_position(p)
-		pos.x -= p.auto_speed.x
-		entity_set_position(&p.entity, pos)
-	}
-
 	colliding_entity: ^Entity
 
 	for &p in g.projectiles {
@@ -480,6 +476,9 @@ update :: proc() {
 
 	input = linalg.normalize0(input)
 	entity_update_position(&g.player.entity, input)
+	for &p in g.projectiles {
+		entity_update_position(&p.entity, {-p.auto_speed.x, 0})
+	}
 	// g.player.rect.x += (input * rl.GetFrameTime() * 50).x
 	// g.player.rect.y += (input * rl.GetFrameTime() * 50).y
 
@@ -600,7 +599,7 @@ game_init :: proc() {
 		collision_rect = rects.collision,
 		parry_rect = rects.parry,
 		auto_speed = {0.12, 0},
-		hex_channels = {{red = 255, green = 125, blue = 0, alpha = 0}},
+		hex_channels = {{red = 155, green = 125, blue = 0, alpha = 0}},
 		health = 0xF,
 		max_health = 0xF,
 		texture = player_texture,
