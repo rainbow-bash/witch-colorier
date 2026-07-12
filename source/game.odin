@@ -30,6 +30,7 @@ package game
 import "./animations"
 import "core:fmt"
 import "core:math/linalg"
+import "core:math/rand"
 import "core:strings"
 import "core:time"
 import rl "vendor:raylib"
@@ -42,7 +43,7 @@ WINDOW_WIDTH :: WINDOW_HEIGHT
 COLLISION_SCALE :: 0.5
 PARRY_SCALE :: 1.2
 
-PIXEL_WINDOW_HEIGHT :: 128
+PIXEL_WINDOW_HEIGHT :: 256
 PIXEL_WINDOW_WIDTH :: PIXEL_WINDOW_HEIGHT
 TILE_SIZE :: 16
 HEX_SQUARE_WIDTH :: TILE_SIZE * 2
@@ -51,15 +52,12 @@ TILE_COLS :: PIXEL_WINDOW_WIDTH / TILE_SIZE
 PROJECTILE_DEATH_DURATION :: 100
 
 
-Hex :: struct {
-	red:   u8,
-	green: u8,
-	blue:  u8,
-	alpha: u8,
+rect_get_position :: proc(rect: rl.Rectangle) -> rl.Vector2 {
+	return {rect.x, rect.y}
 }
 
-hex_to_color :: proc(h: Hex, alpha: u8 = 255) -> rl.Color {
-	return {h.red, h.green, h.blue, alpha}
+rect_get_size :: proc(rect: rl.Rectangle) -> rl.Vector2 {
+	return {rect.x, rect.y}
 }
 
 hexcode_to_color :: proc(hex: int) -> rl.Color {
@@ -76,53 +74,67 @@ hexcode_to_color :: proc(hex: int) -> rl.Color {
 	}
 }
 
-Dead :: enum {
+Entity_Action_State :: enum {
 	NIL,
 	STARTING,
 	ENDED,
 }
 
-Death :: struct {
+Entity_State :: struct {
 	start:          time.Time,
-	phase:          Dead,
+	action:         Entity_Action_State,
 	death_duration: time.Duration,
+	is_dead:        bool,
 }
 
-EntityAnimation :: struct {
+Entity_Animation :: struct {
 	using animation: animations.Animation,
 	texture:         rl.Texture,
 	frame_width:     f32,
 	frame_heigth:    f32,
 }
 
-EntityAnimations :: struct {
-	idle:    EntityAnimation,
-	running: EntityAnimation,
-	dying:   EntityAnimation,
-	emote:   EntityAnimation,
+Entity_Animations :: struct {
+	idle:    Entity_Animation,
+	running: Entity_Animation,
+	dying:   Entity_Animation,
+	emote:   Entity_Animation,
+}
+
+Flags :: struct {
+	can_parry: bool,
 }
 
 Entity :: struct {
-	rect:            rl.Rectangle,
-	collision_rect:  rl.Rectangle,
-	parry_rect:      rl.Rectangle,
 	auto_speed:      rl.Vector2,
 	textures:        []rl.Texture,
-	animations:      EntityAnimations,
+	animations:      Entity_Animations,
 	base_texture:    rl.Texture,
 	dying_animation: []rl.Texture,
+	rects:           Entity_Rectangles,
 	health:          int,
 	max_health:      int,
-	collided_with:   ^Entity,
-	death:           Death,
+	collided_with:   [dynamic]^Projectile,
+	state:           Entity_State,
 	scale:           f32,
+	tint:            rl.Color,
+	flags:           Flags,
+}
+
+Collision_Rect :: struct {
+	using rect:     rl.Rectangle,
+	last_collision: time.Time,
+	target:         ^Entity,
+	is_colliding:   bool,
+	is_action:      bool,
 }
 
 Entity_Rectangles :: struct {
-	base:      rl.Rectangle,
-	collision: rl.Rectangle,
-	parry:     rl.Rectangle,
+	outermost: Collision_Rect,
+	parry:     Collision_Rect,
+	core:      Collision_Rect,
 }
+
 
 entity_generate_rectangles :: proc(pos: rl.Vector2, width: f32, height: f32) -> Entity_Rectangles {
 	x := pos.x
@@ -130,30 +142,63 @@ entity_generate_rectangles :: proc(pos: rl.Vector2, width: f32, height: f32) -> 
 
 	col_w := width * COLLISION_SCALE
 	col_h := height * COLLISION_SCALE
-	col_x := width / 2 - col_w / 2
-	col_y := height / 2 - col_h / 2
+	col_x := x + (width / 2 - col_w / 2)
+	col_y := y + (height / 2 - col_h / 2)
 
 	par_w := width * PARRY_SCALE
 	par_h := height * PARRY_SCALE
-	par_x := width / 2 - par_w / 2
-	par_y := height / 2 - par_h / 2
+	par_x := x + (width / 2 - par_w / 2)
+	par_y := y + (height / 2 - par_h / 2)
 
 	return {
-		base = {x, y, width, height},
-		collision = {col_x, col_y, col_w, col_h},
-		parry = {par_x, par_y, par_w, par_h},
+		outermost = {rect = {x, y, width, height}},
+		parry = {rect = {par_x, par_y, par_w, par_h}},
+		core = {rect = {col_x, col_y, col_w, col_h}},
 	}
-
 }
 
 entity_get_position :: proc(entity: Entity) -> rl.Vector2 {
-	return {entity.rect.x, entity.rect.y}
+	return {entity.rects.outermost.x, entity.rects.outermost.y}
 }
 
 entity_draw_rects :: proc(entity: Entity) {
-	rl.DrawRectangleLinesEx(entity.collision_rect, 0.8, rl.RED)
-	rl.DrawRectangleLinesEx(entity.rect, 0.8, rl.GREEN)
-	rl.DrawRectangleLinesEx(entity.parry_rect, 0.8, rl.BLUE)
+	if entity.state.is_dead {
+		return
+	}
+	rl.DrawRectangleLinesEx(entity.rects.core, 0.8, rl.RED)
+	rl.DrawRectangleLinesEx(entity.rects.parry, 0.8, rl.GREEN)
+	rl.DrawRectangleLinesEx(entity.rects.outermost, 0.8, rl.BLUE)
+}
+
+// TODO: rename this because it does way more than just checking for the collision
+entity_check_collision :: proc(
+	self: ^Entity,
+	rect: ^Collision_Rect,
+	target: ^Entity,
+	target_rect: ^Collision_Rect,
+) -> (
+	bool,
+	time.Time,
+) {
+	colliding_entity: ^Entity = nil
+	if target.state.is_dead {
+		return false, time.Time{}
+	}
+
+	did_collide := rl.CheckCollisionRecs(rect, target_rect)
+
+	last_hit := rect.last_collision
+
+	if did_collide && last_hit == {} {
+		last_hit = time.now()
+		rect.target = target
+	}
+
+	if did_collide {
+		colliding_entity = target
+	}
+
+	return did_collide, last_hit
 }
 
 entity_update_position :: proc(entity: ^Entity, input: rl.Vector2) {
@@ -162,36 +207,12 @@ entity_update_position :: proc(entity: ^Entity, input: rl.Vector2) {
 	x := movement.x
 	y := movement.y
 
-	entity.rect.x += x
-	entity.rect.y += y
-	entity.collision_rect.x += x
-	entity.collision_rect.y += y
-	entity.parry_rect.x += x
-	entity.parry_rect.y += y
-}
-
-
-entity_set_position :: proc(entity: ^Entity, pos: rl.Vector2) {
-	entity.rect.x = pos.x
-	entity.rect.y = pos.y
-}
-
-entity_is_colliding_with :: proc(this, that: Entity) -> bool {
-	d
-	return rl.CheckCollisionRecs(this.collision_rect, that.collision_rect)
-}
-
-entity_is_parrying_with :: proc(this, that: Entity) -> bool {
-	return rl.CheckCollisionRecs(this.parry_rect, that.parry_rect)
-}
-
-Player :: struct {
-	using entity:        Entity,
-	hex_channels:        [1]Hex,
-	texture:             rl.Texture,
-	is_being_hit:        bool,
-	is_parrying:         bool,
-	time_since_last_hit: time.Time,
+	entity.rects.outermost.x += x
+	entity.rects.outermost.y += y
+	entity.rects.core.x += x
+	entity.rects.core.y += y
+	entity.rects.parry.x += x
+	entity.rects.parry.y += y
 }
 
 Debug :: struct {
@@ -204,12 +225,10 @@ Debug :: struct {
 // parries damage the projectile so some of them might have more health so you need to parry more than once
 Projectile :: struct {
 	using entity: Entity,
-	hex:          Hex,
+	hex:          rl.Color,
 	rotation:     f32,
 }
 
-game_parry_projectile :: proc() {
-}
 
 new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 	// position := rl.GetScreenToWorld2D({f32(rand.int63()), f32(rand.int63())})
@@ -222,15 +241,19 @@ new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 	height := f32(f32(texture.height) * scale)
 	width := f32(f32(texture.width) * scale)
 	rects := entity_generate_rectangles(position, width, height)
+	fmt.printfln("%#v", rects)
+
+
+	r := u8(rand.uint32())
+	g := u8(rand.uint32())
+	b := u8(rand.uint32())
 
 	return {
-		rect = rects.base,
-		collision_rect = rects.collision,
-		parry_rect = rects.parry,
-		death = {death_duration = time.Millisecond * PROJECTILE_DEATH_DURATION},
+		rects = rects,
+		state = {death_duration = time.Millisecond * PROJECTILE_DEATH_DURATION},
 		health = 1,
 		scale = scale,
-		hex = {255, 255, 255, 255},
+		hex = {r, g, b, 0},
 		auto_speed = 0.15,
 		base_texture = texture,
 	}
@@ -256,12 +279,13 @@ d: Debug
 
 
 get_player_pos :: proc() -> rl.Vector2 {
-	return rl.Vector2{g.player.rect.x, g.player.rect.y}
+	return rl.Vector2{g.player.rects.outermost.x, g.player.rects.outermost.y}
 }
 
+
 set_player_pos :: proc(pos: rl.Vector2) {
-	g.player.rect.x = pos.x
-	g.player.rect.y = pos.y
+	g.player.rects.outermost.x = pos.x
+	g.player.rects.outermost.y = pos.y
 }
 
 
@@ -296,7 +320,7 @@ debug_persistent :: proc(format: string, args: ..any) {
 }
 
 ui_camera :: proc() -> rl.Camera2D {
-	return {zoom = f32(rl.GetScreenHeight()) / PIXEL_WINDOW_HEIGHT / 2}
+	return {zoom = f32(rl.GetScreenHeight()) / PIXEL_WINDOW_HEIGHT}
 }
 
 draw_text :: proc(text: string, pos_x, pos_y: int, font_size: int, color: rl.Color) {
@@ -306,6 +330,20 @@ draw_text :: proc(text: string, pos_x, pos_y: int, font_size: int, color: rl.Col
 
 draw_rect :: proc(pos_x, pos_y: int, width: int, height: int, color: rl.Color) {
 	rl.DrawRectangle(i32(pos_x), i32(pos_y), i32(width), i32(height), color)
+}
+
+draw_rect_lines :: proc(pos_x, pos_y: int, width: int, height: int, color: rl.Color) {
+	rl.DrawRectangle(i32(pos_x), i32(pos_y), i32(width), i32(height), color)
+}
+
+draw_text_rect :: proc(
+	texture: rl.Texture,
+	rect: rl.Rectangle,
+	rotation: f32 = 0,
+	scale: f32 = 1,
+	tint: rl.Color = rl.WHITE,
+) {
+	rl.DrawTextureEx(texture, rect_get_position(rect), rotation, scale, tint)
 }
 
 render_debug_f3 :: proc() {
@@ -329,12 +367,10 @@ render_debug :: proc() {
 	}
 }
 
-
 // TODO: make an ui context where the ui elements are stacked,
 //			 and everytime a rectangle is drawn add the height (column) or width (row) of that shape, so the next y or x in the current context gets updated to that
 render_ui :: proc() {
-
-	y := 208
+	y := PIXEL_WINDOW_HEIGHT / 2 + PIXEL_WINDOW_HEIGHT / 3
 	{
 		health_width := ((g.player.health * HEALTH_BAR_WIDTH) / g.player.max_health)
 		draw_rect(0, y, HEALTH_BAR_WIDTH, 10, hexcode_to_color(0x2c2933))
@@ -345,20 +381,33 @@ render_ui :: proc() {
 	{
 		for hex, _ in g.player.hex_channels {
 			x := 0 * HEX_SQUARE_WIDTH
-			draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {hex.red, 0, 0, 255})
-			draw_text(fmt.aprintf("0x%2X", hex.red), x, y, 1, rl.WHITE)
+			red := hex[0]
+			green := hex[1]
+			blue := hex[2]
 
-			x = 1 * HEX_SQUARE_WIDTH
-			draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {0, hex.green, 0, 255})
-			draw_text(fmt.aprintf("0x%2X", hex.green), x, y, 1, rl.WHITE)
+			{
+				draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {red, 0, 0, 255})
+				draw_text(fmt.aprintf("0x%2X", red), x, y, 1, rl.WHITE)
+				x += HEX_SQUARE_WIDTH
+			}
 
-			x = 2 * HEX_SQUARE_WIDTH
-			draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {0, 0, hex.blue, 255})
-			draw_text(fmt.aprintf("0x%2X", hex.blue), x, y, 1, rl.WHITE)
+			{
+				draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {0, green, 0, 255})
+				draw_text(fmt.aprintf("0x%2X", green), x, y, 1, rl.WHITE)
+				x += HEX_SQUARE_WIDTH
+			}
+
+			{
+				draw_rect(x, y, HEX_SQUARE_WIDTH, HEX_SQUARE_HEIGHT, {0, 0, blue, 255})
+				draw_text(fmt.aprintf("0x%2X", blue), x, y, 1, rl.WHITE)
+				x += HEX_SQUARE_WIDTH
+			}
+
+
 			y += HEX_SQUARE_HEIGHT + 1
 			x = 0 * HEX_SQUARE_WIDTH
-			draw_rect(x, y, HEX_SQUARE_WIDTH * 3, HEX_SQUARE_HEIGHT, hex_to_color(hex))
-			draw_text(fmt.aprintf("0x%2X%2X%2X", hex.red, hex.green, hex.blue), x, y, 1, rl.WHITE)
+			draw_rect(x, y, HEX_SQUARE_WIDTH * 3, HEX_SQUARE_HEIGHT, hex)
+			draw_text(fmt.aprintf("0x%2X%2X%2X", red, green, blue), x, y, 1, rl.WHITE)
 		}
 	}
 }
@@ -393,7 +442,7 @@ update_debug :: proc() {
 	if rl.IsMouseButtonDown(.LEFT) {
 		if g.debug.is_dragging_player {
 			set_player_pos(mouse)
-		} else if rl.CheckCollisionPointRec(mouse, g.player.rect) {
+		} else if rl.CheckCollisionPointRec(mouse, g.player.rects.outermost) {
 			set_player_pos(mouse)
 			g.debug.is_dragging_player = true
 		}
@@ -407,52 +456,7 @@ update_debug :: proc() {
 
 }
 
-update :: proc() {
-	update_debug()
-	animations.update(&g.player.animations.idle.animation)
-	if rl.IsKeyPressed(.LEFT_ALT) {
-		// g.is_paused = !g.is_paused
-		g.is_debug_mode = !g.is_debug_mode
-	}
-
-	if g.is_paused {
-		return
-	}
-
-
-	colliding_entity: ^Entity
-
-	for &p in g.projectiles {
-		if g.player.collided_with == &p {
-			continue
-		}
-		if (entity_is_colliding_with(g.player.entity, p.entity)) {
-			g.player.health -= 1
-			g.player.is_being_hit = true
-			colliding_entity = &p
-			g.player.collided_with = &p
-			g.player.time_since_last_hit = time.now()
-			break
-		} else {
-			g.player.is_being_hit = false
-		}
-	}
-
-	delta := time.diff(g.player.time_since_last_hit, time.now()) * time.Millisecond
-
-	if delta < 500 * time.Millisecond && colliding_entity != nil && rl.IsKeyPressed(.SPACE) {
-		g.player.collided_with.death.start = time.now()
-		g.player.collided_with.death.phase = .STARTING
-		g.player.is_parrying = true
-	}
-
-	if colliding_entity == nil && g.player.is_parrying {
-		g.player.is_parrying = false
-	}
-
-	// g.camera_pos += {g.camera_speed, 0}
-	// g.player.rect.x += g.player.auto_speed.x
-	// g.player.rect.y += g.player.auto_speed.y
+handle_input :: proc() {
 	input: rl.Vector2
 
 	if rl.IsKeyDown(.UP) || rl.IsKeyDown(.W) {
@@ -473,18 +477,117 @@ update :: proc() {
 		input.x += 1
 	}
 
+	if rl.IsKeyPressed(.LEFT_ALT) {
+		g.is_debug_mode = !g.is_debug_mode
+	}
 
 	input = linalg.normalize0(input)
 	entity_update_position(&g.player.entity, input)
 	for &p in g.projectiles {
 		entity_update_position(&p.entity, {-p.auto_speed.x, 0})
 	}
-	// g.player.rect.x += (input * rl.GetFrameTime() * 50).x
-	// g.player.rect.y += (input * rl.GetFrameTime() * 50).y
+
+	for &a in g.player.attacks {
+		entity_update_position(&a.entity, {a.auto_speed.x, 0})
+		a.rotation = f32((int(a.rotation + 1)) % 360)
+	}
+
+}
+
+update :: proc() {
+	update_debug()
+	handle_input()
+	animations.update(&g.player.animations.idle.animation)
+	if g.is_paused {
+		return
+	}
+
+
+	// g.player.rects.parry.is_colliding = false
+	// g.player.rects.parry.last_collision = time.Time{}
+
+	g.player.collided_with = nil
+	{
+		// colliding_entity: ^Entity
+		last_collision: time.Time
+		is_colliding := false
+		collided_with: [dynamic]^Projectile
+
+		for &p in g.projectiles {
+			is, lc := entity_check_collision(
+				&g.player.entity, //
+				&g.player.rects.parry,
+				&p,
+				&p.rects.core,
+			)
+			if is {
+				last_collision = lc
+				is_colliding = is
+				append(&collided_with, &p)
+			}
+		}
+		g.player.rects.parry.is_colliding = is_colliding
+		g.player.rects.parry.last_collision = last_collision
+		for ent in collided_with {
+			append(&g.player.collided_with, ent)
+		}
+	}
+
+	{
+		last_collision: time.Time
+		is_colliding := false
+		rect := &g.player.rects.outermost
+		collided_with: [dynamic]^Projectile
+		for &p in g.projectiles {
+			is, lc := entity_check_collision(
+				&g.player.entity, //
+				rect,
+				&p,
+				&p.rects.core,
+			)
+			if is {
+				is_colliding = is
+				last_collision = lc
+				append(&collided_with, &p)
+			}
+		}
+		rect.is_colliding = is_colliding
+		rect.last_collision = last_collision
+		for ent in collided_with {
+			append(&g.player.collided_with, ent)
+		}
+	}
+
+	parry_dt := time.since(g.player.rects.parry.last_collision)
+	core_parry_dt := time.since(g.player.rects.core.last_collision)
+
+	can_parry :=
+		(parry_dt < 300 * time.Millisecond && g.player.rects.parry.is_colliding) ||
+		(core_parry_dt < 100 * time.Millisecond && g.player.rects.core.is_colliding)
+
+	g.player.flags.can_parry = can_parry
+
+
+	if rl.IsKeyDown(.L) && can_parry {
+		g.player.rects.parry.is_action = true
+		for &ent in g.player.collided_with {
+			ent.state.is_dead = true
+			player_add_hex_color(ent.hex)
+		}
+		// g.player.rects.parry.target.state.is_dead = true
+	} else {
+		g.player.rects.parry.is_action = false
+	}
+
+	if rl.IsKeyDown(.SPACE) {
+		player_attack(.BALL)
+	}
+
 
 }
 
 render :: proc() {
+	rl.DrawRectangle(-34, -34, 20, 20, rl.RED)
 	rl.DrawRectangle(0, 0, 20, 20, rl.RED)
 	for b in g.obstacles {
 		rl.DrawRectangleV(b, {f32(TILE_SIZE), f32(TILE_SIZE)}, rl.GREEN)
@@ -493,42 +596,58 @@ render :: proc() {
 	rl.DrawTexturePro(
 		g.player.animations.idle.texture,
 		animations.frame(&g.player.animations.idle.animation, 6),
-		g.player.rect,
+		g.player.rects.outermost,
 		{0, 0},
 		0,
 		rl.WHITE,
 	)
-	for p in g.projectiles {
-		alpha: u8 = 0
-		switch (p.death.phase) {
-		case .ENDED:
-			continue
-		case .NIL:
-			alpha = 255
-		case .STARTING:
-			since := time.since(p.death.start)
-			remaining := u8(p.death.death_duration - since)
-			alpha = remaining
-		}
 
+	for p in g.projectiles {
+		if p.state.is_dead {
+			continue
+		}
 		rl.DrawTextureEx(
 			p.base_texture,
 			entity_get_position(p.entity),
 			p.rotation,
 			p.scale,
-			hex_to_color(p.hex, alpha),
+			rl.WHITE,
 		)
 	}
 
-	if g.player.is_being_hit {
+	if g.player.flags.can_parry {
+		for p in g.player.collided_with {
+			rl.DrawRectangleLinesEx(p.rects.outermost, 2, rl.ORANGE)
+		}
+	}
+
+	if g.player.rects.core.is_colliding {
 		rl.ClearBackground(rl.RED)
 	}
-	if g.player.is_parrying {
+
+	if g.player.rects.parry.is_action {
 		rl.DrawRectangleV(get_player_pos(), {20, 20}, rl.PURPLE)
 	}
+
 	if g.is_debug_mode {
 		render_debug()
 	}
+
+	debug("%v", len(g.player.attacks))
+
+	for a in g.player.attacks {
+		if a.state.is_dead {
+			continue
+		}
+		rl.DrawTextureEx(
+			a.base_texture,
+			entity_get_position(a.entity),
+			a.rotation,
+			a.scale,
+			rl.RED,
+		)
+	}
+
 }
 
 draw :: proc() {
@@ -585,6 +704,7 @@ game_init :: proc() {
 	g = new(Game_Memory)
 
 	player_texture := rl.LoadTexture("assets/witch.png")
+	sparkle_texture := rl.LoadTexture("assets/sparkle.png")
 	projectile_texture := rl.LoadTexture("assets/computer.png")
 	player_idle_texture_atlas := rl.LoadTexture("assets/twi.png")
 	center := screen_center()
@@ -595,14 +715,13 @@ game_init :: proc() {
 	rects := entity_generate_rectangles(center, width, height)
 
 	player: Player = {
-		rect = rects.base,
-		collision_rect = rects.collision,
-		parry_rect = rects.parry,
+		rects = rects,
 		auto_speed = {0.12, 0},
-		hex_channels = {{red = 155, green = 125, blue = 0, alpha = 0}},
+		hex_channels = {{15, 15, 15, 255}},
 		health = 0xF,
 		max_health = 0xF,
 		texture = player_texture,
+		attack_ball_texture = sparkle_texture,
 		animations = {
 			idle = {
 				animation = {

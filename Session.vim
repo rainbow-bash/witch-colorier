@@ -4,9 +4,9 @@ let v:this_session=expand("<sfile>:p")
 doautoall SessionLoadPre
 let VM_case_setting = ""
 let VM_disable_syntax_in_imode =  0 
-let VM_check_mappings =  1 
 let VM_mouse_mappings =  0 
 let VM_debug =  0 
+let VM_check_mappings =  1 
 let VM_default_mappings =  1 
 let VM_persistent_registers =  0 
 let VM_live_editing =  1 
@@ -22,11 +22,12 @@ if expand('%') == '' && !&modified && line('$') <= 1 && getline(1) == ''
 endif
 let s:shortmess_save = &shortmess
 set shortmess+=aoO
-badd +1 source/animation/animation.odin
+badd +79 source/player.odin
 argglobal
 %argdel
-edit source/animation/animation.odin
+edit source/player.odin
 argglobal
+balt ~/opt/thirdparty/odin/vendor/raylib/raylib.odin
 setlocal foldmethod=manual
 setlocal foldexpr=0
 setlocal foldmarker={{{,}}}
@@ -34,15 +35,15 @@ setlocal foldignore=#
 setlocal foldlevel=0
 setlocal foldminlines=1
 setlocal foldnestmax=20
-setlocal foldenable
+setlocal nofoldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 1 - ((0 * winheight(0) + 25) / 50)
+let s:l = 64 - ((15 * winheight(0) + 15) / 31)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 1
-normal! 017|
+keepjumps 64
+normal! 018|
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0 && getbufvar(s:wipebuf, '&buftype') isnot# 'terminal'
   silent exe 'bwipe ' . s:wipebuf
