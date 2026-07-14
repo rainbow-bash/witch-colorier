@@ -1,6 +1,7 @@
-package animations
+package anime
 
 import rl "vendor:raylib"
+
 Animation :: struct {
 	first:         int,
 	last:          int,
@@ -9,7 +10,25 @@ Animation :: struct {
 	duration_left: f32,
 }
 
-update :: proc(self: ^Animation) {
+Memory :: struct {
+	owner:      string,
+	animations: map[string]^Animation,
+}
+
+new_memory :: proc(owner: string) -> Memory {
+	return {owner = owner, animations = make(map[string]^Animation)}
+}
+
+update :: proc(self: ^Memory, name: string) -> bool {
+	animation, ok := self.animations[name]
+	if !ok {
+		return false
+	}
+	update_animation(animation)
+	return true
+}
+
+update_animation :: proc(self: ^Animation) {
 	dt := rl.GetFrameTime()
 	self.duration_left -= dt
 	if self.duration_left <= 0 {
@@ -21,6 +40,7 @@ update :: proc(self: ^Animation) {
 		}
 	}
 }
+
 
 frame :: proc(
 	self: ^Animation,

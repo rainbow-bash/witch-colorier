@@ -27,7 +27,7 @@ created.
 
 package game
 
-import "./animations"
+import "./anime"
 import "core:fmt"
 import "core:math/linalg"
 import "core:math/rand"
@@ -88,7 +88,7 @@ Entity_State :: struct {
 }
 
 Entity_Animation :: struct {
-	using animation: animations.Animation,
+	using animation: anime.Animation,
 	texture:         rl.Texture,
 	frame_width:     f32,
 	frame_heigth:    f32,
@@ -101,24 +101,30 @@ Entity_Animations :: struct {
 	emote:   Entity_Animation,
 }
 
+Entity_Animation2 :: struct {
+	name: string,
+}
+
 Flags :: struct {
 	can_parry: bool,
 }
 
 Entity :: struct {
-	auto_speed:      rl.Vector2,
-	textures:        []rl.Texture,
-	animations:      Entity_Animations,
-	base_texture:    rl.Texture,
-	dying_animation: []rl.Texture,
-	rects:           Entity_Rectangles,
-	health:          int,
-	max_health:      int,
-	collided_with:   [dynamic]^Projectile,
-	state:           Entity_State,
-	scale:           f32,
-	tint:            rl.Color,
-	flags:           Flags,
+	auto_speed:        rl.Vector2,
+	textures:          []rl.Texture,
+	animations:        Entity_Animations,
+	animations_memory: Entity_Animation2,
+	base_texture:      rl.Texture,
+	dying_animation:   []rl.Texture,
+	rects:             Entity_Rectangles,
+	health:            int,
+	max_health:        int,
+	collided_with:     [dynamic]^Entity,
+	state:             Entity_State,
+	scale:             f32,
+	tint:              rl.Color,
+	flags:             Flags,
+	hex:               rl.Color,
 }
 
 Collision_Rect :: struct {
@@ -201,6 +207,33 @@ entity_check_collision :: proc(
 	return did_collide, last_hit
 }
 
+entity_update_collision_state :: proc(self: ^Entity) {
+	{
+		last_collision: time.Time
+		is_colliding := false
+		collided_with: [dynamic]^Entity
+
+		for &other in g.entities {
+			is, lc := entity_check_collision(
+				self, //
+				&self.rects.parry,
+				&other,
+				&other.rects.core,
+			)
+			if is {
+				last_collision = lc
+				is_colliding = is
+				append(&collided_with, &other)
+			}
+		}
+		self.rects.parry.is_colliding = is_colliding
+		self.rects.parry.last_collision = last_collision
+		for ent in collided_with {
+			append(&self.collided_with, ent)
+		}
+	}
+}
+
 entity_update_position :: proc(entity: ^Entity, input: rl.Vector2) {
 	movement := (input * rl.GetFrameTime() * 50)
 
@@ -225,7 +258,6 @@ Debug :: struct {
 // parries damage the projectile so some of them might have more health so you need to parry more than once
 Projectile :: struct {
 	using entity: Entity,
-	hex:          rl.Color,
 	rotation:     f32,
 }
 
@@ -267,6 +299,7 @@ Game_Memory :: struct {
 	camera_pos:    rl.Vector2,
 	obstacles:     [24]rl.Vector2,
 	projectiles:   [3]Projectile,
+	entities:      [dynamic]Entity,
 	camera_speed:  f32,
 	some_number:   int,
 	run:           bool,
@@ -418,10 +451,6 @@ update_debug :: proc() {
 		reset_memory()
 	}
 
-	if rl.IsKeyPressed(.K) {
-		g.player.health -= 1
-	}
-
 	if rl.GetMouseWheelMove() != 0 {
 		// g.camera_pos = rl.GetMousePosition()
 		y := rl.GetMouseWheelMove()
@@ -456,7 +485,7 @@ update_debug :: proc() {
 
 }
 
-handle_input :: proc() {
+handle_input :: proc() -> rl.Vector2 {
 	input: rl.Vector2
 
 	if rl.IsKeyDown(.UP) || rl.IsKeyDown(.W) {
@@ -481,8 +510,27 @@ handle_input :: proc() {
 		g.is_debug_mode = !g.is_debug_mode
 	}
 
+	if rl.IsKeyPressed(.ESCAPE) {
+		g.is_paused = !g.is_paused
+	}
+
 	input = linalg.normalize0(input)
+	return input
+}
+
+
+update :: proc() {
+	input := handle_input()
+	if g.is_paused {
+		return
+	}
+
 	entity_update_position(&g.player.entity, input)
+
+	for &ent in g.entities {
+		entity_update_collision_state(&ent)
+	}
+
 	for &p in g.projectiles {
 		entity_update_position(&p.entity, {-p.auto_speed.x, 0})
 	}
@@ -491,16 +539,8 @@ handle_input :: proc() {
 		entity_update_position(&a.entity, {a.auto_speed.x, 0})
 		a.rotation = f32((int(a.rotation + 1)) % 360)
 	}
-
-}
-
-update :: proc() {
 	update_debug()
-	handle_input()
-	animations.update(&g.player.animations.idle.animation)
-	if g.is_paused {
-		return
-	}
+	anime.update_animation(&g.player.animations.idle.animation)
 
 
 	// g.player.rects.parry.is_colliding = false
@@ -579,7 +619,7 @@ update :: proc() {
 		g.player.rects.parry.is_action = false
 	}
 
-	if rl.IsKeyDown(.SPACE) {
+	if rl.IsKeyPressed(.K) {
 		player_attack(.BALL)
 	}
 
@@ -595,7 +635,7 @@ render :: proc() {
 	rl.DrawRectangle(0, 0, PIXEL_WINDOW_HEIGHT, 20, rl.BLUE)
 	rl.DrawTexturePro(
 		g.player.animations.idle.texture,
-		animations.frame(&g.player.animations.idle.animation, 6),
+		anime.frame(&g.player.animations.idle.animation, 6),
 		g.player.rects.outermost,
 		{0, 0},
 		0,
@@ -639,13 +679,15 @@ render :: proc() {
 		if a.state.is_dead {
 			continue
 		}
-		rl.DrawTextureEx(
-			a.base_texture,
-			entity_get_position(a.entity),
-			a.rotation,
-			a.scale,
-			rl.RED,
-		)
+		for i in 0 ..< 5 {
+			pos := entity_get_position(a.entity)
+			pos.x += f32(i)
+			tint := a.tint
+			// tint[3] -= u8(i) / 4
+			scale := a.scale
+			// scale -= f32(i) / 8
+			rl.DrawTextureEx(a.base_texture, pos, a.rotation, scale, tint)
+		}
 	}
 
 }

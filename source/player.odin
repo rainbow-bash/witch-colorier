@@ -21,6 +21,8 @@ Player :: struct {
 	texture:             rl.Texture,
 }
 
+// TODO: make a trail for the shooting
+// rl.IsKeyPressed(.SPACE)
 player_attack :: proc(kind: Attack_Kind) {
 	width := f32(g.player.attack_ball_texture.width)
 	height := f32(g.player.attack_ball_texture.height)
