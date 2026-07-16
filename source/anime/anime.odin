@@ -19,7 +19,7 @@ new_memory :: proc(owner: string) -> Memory {
 	return {owner = owner, animations = make(map[string]^Animation)}
 }
 
-update :: proc(self: ^Memory, name: string) -> bool {
+update_memory :: proc(self: ^Memory, name: string) -> bool {
 	animation, ok := self.animations[name]
 	if !ok {
 		return false

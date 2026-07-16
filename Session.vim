@@ -4,9 +4,9 @@ let v:this_session=expand("<sfile>:p")
 doautoall SessionLoadPre
 let VM_case_setting = ""
 let VM_disable_syntax_in_imode =  0 
+let VM_check_mappings =  1 
 let VM_mouse_mappings =  0 
 let VM_debug =  0 
-let VM_check_mappings =  1 
 let VM_default_mappings =  1 
 let VM_persistent_registers =  0 
 let VM_live_editing =  1 
@@ -22,12 +22,12 @@ if expand('%') == '' && !&modified && line('$') <= 1 && getline(1) == ''
 endif
 let s:shortmess_save = &shortmess
 set shortmess+=aoO
-badd +79 source/player.odin
+badd +843 source/game.odin
 argglobal
 %argdel
-edit source/player.odin
+edit source/game.odin
 argglobal
-balt ~/opt/thirdparty/odin/vendor/raylib/raylib.odin
+balt ~/Documents/projects/games/witch-colorier/assets/msn-emoticons/original/rainbow.png
 setlocal foldmethod=manual
 setlocal foldexpr=0
 setlocal foldmarker={{{,}}}
@@ -35,15 +35,15 @@ setlocal foldignore=#
 setlocal foldlevel=0
 setlocal foldminlines=1
 setlocal foldnestmax=20
-setlocal nofoldenable
+setlocal foldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 64 - ((15 * winheight(0) + 15) / 31)
+let s:l = 843 - ((20 * winheight(0) + 20) / 41)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 64
-normal! 018|
+keepjumps 843
+normal! 022|
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0 && getbufvar(s:wipebuf, '&buftype') isnot# 'terminal'
   silent exe 'bwipe ' . s:wipebuf
@@ -57,7 +57,6 @@ if filereadable(s:sx)
 endif
 let &g:so = s:so_save | let &g:siso = s:siso_save
 set hlsearch
-nohlsearch
 doautoall SessionLoadPost
 unlet SessionLoad
 " vim: set ft=vim :

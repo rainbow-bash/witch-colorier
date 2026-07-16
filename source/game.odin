@@ -1,3 +1,5 @@
+#+feature dynamic-literals
+#+feature dynamic-literals
 /*
 This file is the starting point of your game.
 
@@ -102,29 +104,70 @@ Entity_Animations :: struct {
 }
 
 Entity_Animation2 :: struct {
-	name: string,
+	memory:  anime.Memory,
+	current: string,
 }
 
 Flags :: struct {
 	can_parry: bool,
 }
 
+Entity_Kind :: enum {
+	PLAYER,
+	PROJECTILE,
+	INK,
+	BALL,
+	RAY,
+}
+
+Render :: struct {}
+
 Entity :: struct {
-	auto_speed:        rl.Vector2,
-	textures:          []rl.Texture,
-	animations:        Entity_Animations,
-	animations_memory: Entity_Animation2,
-	base_texture:      rl.Texture,
-	dying_animation:   []rl.Texture,
-	rects:             Entity_Rectangles,
-	health:            int,
-	max_health:        int,
-	collided_with:     [dynamic]^Entity,
-	state:             Entity_State,
-	scale:             f32,
-	tint:              rl.Color,
-	flags:             Flags,
-	hex:               rl.Color,
+	kind:            Entity_Kind,
+	auto_speed:      rl.Vector2,
+	textures:        []rl.Texture,
+	animations:      Entity_Animations,
+	animate:         Entity_Animation2,
+	base_texture:    rl.Texture,
+	dying_animation: []rl.Texture,
+	rects:           Entity_Rectangles,
+	health:          int,
+	max_health:      int,
+	collided_with:   [dynamic]^Entity,
+	state:           Entity_State,
+	scale:           f32,
+	tint:            rl.Color,
+	flags:           Flags,
+	rotation:        f32,
+	hex:             rl.Color,
+}
+
+new_entity :: proc(position: rl.Vector2, texture: rl.Texture, i := 0) -> Entity {
+	position := position
+	position.x += f32(texture.width) * 2.0
+	position.y += f32(texture.height * i32(i))
+	scale: f32 = 0.5
+
+	height := f32(f32(texture.height) * scale)
+	width := f32(f32(texture.width) * scale)
+	rects := entity_generate_rectangles(position, width, height)
+
+	r := u8(rand.uint32())
+	g := u8(rand.uint32())
+	b := u8(rand.uint32())
+
+
+	ent := Entity {
+		rects = rects,
+		state = {death_duration = time.Millisecond * PROJECTILE_DEATH_DURATION},
+		health = 1,
+		scale = scale,
+		hex = {r, g, b, 0},
+		auto_speed = 0.15,
+		base_texture = texture,
+	}
+
+	return ent
 }
 
 Collision_Rect :: struct {
@@ -165,6 +208,10 @@ entity_generate_rectangles :: proc(pos: rl.Vector2, width: f32, height: f32) -> 
 
 entity_get_position :: proc(entity: Entity) -> rl.Vector2 {
 	return {entity.rects.outermost.x, entity.rects.outermost.y}
+}
+
+entity_get_size :: proc(entity: Entity) -> rl.Vector2 {
+	return {entity.rects.outermost.width, entity.rects.outermost.height}
 }
 
 entity_draw_rects :: proc(entity: Entity) {
@@ -258,7 +305,6 @@ Debug :: struct {
 // parries damage the projectile so some of them might have more health so you need to parry more than once
 Projectile :: struct {
 	using entity: Entity,
-	rotation:     f32,
 }
 
 
@@ -273,7 +319,6 @@ new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 	height := f32(f32(texture.height) * scale)
 	width := f32(f32(texture.width) * scale)
 	rects := entity_generate_rectangles(position, width, height)
-	fmt.printfln("%#v", rects)
 
 
 	r := u8(rand.uint32())
@@ -529,6 +574,10 @@ update :: proc() {
 
 	for &ent in g.entities {
 		entity_update_collision_state(&ent)
+		ok := anime.update_memory(&ent.animate.memory, ent.animate.current)
+		if !ok {
+			// debug("%#v has no animation with the name `%#v`", ent, ent.animate.current)
+		}
 	}
 
 	for &p in g.projectiles {
@@ -642,6 +691,14 @@ render :: proc() {
 		rl.WHITE,
 	)
 
+	for e in g.entities {
+		if e.state.is_dead {
+			continue
+		}
+		rl.DrawTextureEx(e.base_texture, entity_get_position(e), e.rotation, e.scale, rl.WHITE)
+		// rl.DrawRectangleV(entity_get_position(ent), entity_get_size(ent), rl.RED)
+	}
+
 	for p in g.projectiles {
 		if p.state.is_dead {
 			continue
@@ -673,7 +730,6 @@ render :: proc() {
 		render_debug()
 	}
 
-	debug("%v", len(g.player.attacks))
 
 	for a in g.player.attacks {
 		if a.state.is_dead {
@@ -748,6 +804,8 @@ game_init :: proc() {
 	player_texture := rl.LoadTexture("assets/witch.png")
 	sparkle_texture := rl.LoadTexture("assets/sparkle.png")
 	projectile_texture := rl.LoadTexture("assets/computer.png")
+	rainbow_texture := rl.LoadTexture("assets/msn-emoticons/original/rainbow.png")
+
 	player_idle_texture_atlas := rl.LoadTexture("assets/twi.png")
 	center := screen_center()
 
@@ -785,6 +843,7 @@ game_init :: proc() {
 		player        = player,
 		run           = true,
 		some_number   = 100,
+		entities      = {new_entity({0, 0}, rainbow_texture)},
 		projectiles   = {
 			new_random_projectile(projectile_texture, 0),
 			new_random_projectile(projectile_texture, 1),

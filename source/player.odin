@@ -1,15 +1,9 @@
 package game
 import rl "vendor:raylib"
 
-Attack_Kind :: enum {
-	BALL,
-	RAY,
-}
 
 Attack :: struct {
 	using entity: Entity,
-	rotation:     f32,
-	kind:         Attack_Kind,
 }
 
 
@@ -23,7 +17,7 @@ Player :: struct {
 
 // TODO: make a trail for the shooting
 // rl.IsKeyPressed(.SPACE)
-player_attack :: proc(kind: Attack_Kind) {
+player_attack :: proc(kind: Entity_Kind) {
 	width := f32(g.player.attack_ball_texture.width)
 	height := f32(g.player.attack_ball_texture.height)
 
