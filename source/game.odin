@@ -33,8 +33,10 @@ import "./anime"
 import "core:fmt"
 import "core:math/linalg"
 import "core:math/rand"
+import "core:mem"
 import "core:strings"
 import "core:time"
+import gl "debug"
 import rl "vendor:raylib"
 
 WINDOW_HEIGHT :: 720
@@ -91,7 +93,6 @@ Entity_State :: struct {
 
 Entity_Animation :: struct {
 	using animation: anime.Animation,
-	texture:         rl.Texture,
 	frame_width:     f32,
 	frame_heigth:    f32,
 }
@@ -104,7 +105,7 @@ Entity_Animations :: struct {
 }
 
 Entity_Animation2 :: struct {
-	memory:  anime.Memory,
+	memory:  anime.Animemory,
 	current: string,
 }
 
@@ -135,6 +136,7 @@ Entity :: struct {
 	max_health:      int,
 	collided_with:   [dynamic]^Entity,
 	state:           Entity_State,
+	animemory:       anime.Animemory,
 	scale:           f32,
 	tint:            rl.Color,
 	flags:           Flags,
@@ -307,7 +309,6 @@ Projectile :: struct {
 	using entity: Entity,
 }
 
-
 new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 	// position := rl.GetScreenToWorld2D({f32(rand.int63()), f32(rand.int63())})
 	// w := f32(rl.GetScreenWidth())
@@ -350,6 +351,7 @@ Game_Memory :: struct {
 	run:           bool,
 	blocks:        [TILE_COLS * 6]rl.Rectangle,
 	zoom:          f32,
+	ui_zoom:       f32,
 }
 
 g: ^Game_Memory
@@ -366,18 +368,6 @@ set_player_pos :: proc(pos: rl.Vector2) {
 	g.player.rects.outermost.y = pos.y
 }
 
-
-game_camera :: proc() -> rl.Camera2D {
-	w := f32(rl.GetScreenWidth())
-	h := f32(rl.GetScreenHeight())
-
-	return {
-		zoom   = (h / PIXEL_WINDOW_HEIGHT) + g.zoom,
-		// zoom   = 4,
-		target = g.camera_pos,
-		offset = {w / 2, h / 2},
-	}
-}
 
 screen_center :: proc() -> rl.Vector2 {
 	return {0, 0}
@@ -397,8 +387,20 @@ debug_persistent :: proc(format: string, args: ..any) {
 	append(&d.persistent_messages, fmt.aprintf(format, ..args))
 }
 
+game_camera :: proc() -> rl.Camera2D {
+	w := f32(rl.GetScreenWidth())
+	h := f32(rl.GetScreenHeight())
+
+	return {
+		zoom   = (h / PIXEL_WINDOW_HEIGHT) + g.zoom,
+		// zoom   = 4,
+		target = g.camera_pos,
+		offset = {w / 2, h / 2},
+	}
+}
+
 ui_camera :: proc() -> rl.Camera2D {
-	return {zoom = f32(rl.GetScreenHeight()) / PIXEL_WINDOW_HEIGHT}
+	return {zoom = f32(rl.GetScreenHeight()) / PIXEL_WINDOW_HEIGHT + g.ui_zoom}
 }
 
 draw_text :: proc(text: string, pos_x, pos_y: int, font_size: int, color: rl.Color) {
@@ -425,17 +427,7 @@ draw_text_rect :: proc(
 }
 
 render_debug_f3 :: proc() {
-	{
-		msg := strings.join(g.debug.messages[:], "\n")
-		txt := strings.clone_to_cstring(msg)
-		rl.DrawText(txt, 0, 0, 1, rl.WHITE)
-	}
-	// {
-	// 	msg := strings.join(d.persistent_messages[:], "\n")
-	// 	txt := strings.clone_to_cstring(msg)
-	// 	x: i32 = 230
-	// 	rl.DrawText(txt, x, 0, 1, rl.WHITE)
-	// }
+	gl.render()
 }
 
 render_debug :: proc() {
@@ -498,10 +490,19 @@ update_debug :: proc() {
 
 	if rl.GetMouseWheelMove() != 0 {
 		// g.camera_pos = rl.GetMousePosition()
-		y := rl.GetMouseWheelMove()
-		g.zoom = g.zoom + y
-		if g.zoom < -5 {
-			g.zoom = -5
+		zoom := rl.IsKeyDown(.LEFT_ALT)
+		if zoom {
+			y := rl.GetMouseWheelMove()
+			g.ui_zoom = g.ui_zoom + y
+			if g.ui_zoom < -5 {
+				g.ui_zoom = -5
+			}
+		} else {
+			y := rl.GetMouseWheelMove()
+			g.zoom = g.zoom + y
+			if g.zoom < -5 {
+				g.zoom = -5
+			}
 		}
 
 		// fmt.println(y)
@@ -559,6 +560,7 @@ handle_input :: proc() -> rl.Vector2 {
 		g.is_paused = !g.is_paused
 	}
 
+
 	input = linalg.normalize0(input)
 	return input
 }
@@ -574,11 +576,12 @@ update :: proc() {
 
 	for &ent in g.entities {
 		entity_update_collision_state(&ent)
-		ok := anime.update_memory(&ent.animate.memory, ent.animate.current)
-		if !ok {
-			// debug("%#v has no animation with the name `%#v`", ent, ent.animate.current)
+		err := anime.update(&ent.animate.memory, ent.animate.memory.current)
+		if err != nil {
+			gl.msg("%#v", err)
 		}
 	}
+	// anime.update(&animem, "idle")
 
 	for &p in g.projectiles {
 		entity_update_position(&p.entity, {-p.auto_speed.x, 0})
@@ -589,7 +592,7 @@ update :: proc() {
 		a.rotation = f32((int(a.rotation + 1)) % 360)
 	}
 	update_debug()
-	anime.update_animation(&g.player.animations.idle.animation)
+	// anime.update_animation(&g.player.animations.idle.animation)
 
 
 	// g.player.rects.parry.is_colliding = false
@@ -675,77 +678,126 @@ update :: proc() {
 
 }
 
+animFrames: i32
+
+currentAnimFrame: i32 = 0 // Current animation frame to load and draw
+frameDelay: i32 = 8 // Frame delay to switch between animation frames
+frameCounter: i32 = 0
+nextFrameDataOffset: i32 = 0
+
+gImage := rl.LoadImageAnim("assets/idle.gif", &animFrames)
+scarfy := rl.LoadTextureFromImage(gImage)
+
+ptr: [^]byte
+
 render :: proc() {
-	rl.DrawRectangle(-34, -34, 20, 20, rl.RED)
-	rl.DrawRectangle(0, 0, 20, 20, rl.RED)
-	for b in g.obstacles {
-		rl.DrawRectangleV(b, {f32(TILE_SIZE), f32(TILE_SIZE)}, rl.GREEN)
-	}
-	rl.DrawRectangle(0, 0, PIXEL_WINDOW_HEIGHT, 20, rl.BLUE)
-	rl.DrawTexturePro(
-		g.player.animations.idle.texture,
-		anime.frame(&g.player.animations.idle.animation, 6),
-		g.player.rects.outermost,
-		{0, 0},
-		0,
-		rl.WHITE,
-	)
+	if false {
+		frameCounter += 1
+		if (frameCounter >= frameDelay) {
+			// Move to next frame
+			// NOTE: If final frame is reached we return to first frame
+			currentAnimFrame += 1
+			if (currentAnimFrame >= animFrames) {
+				currentAnimFrame = 0
+			}
 
-	for e in g.entities {
-		if e.state.is_dead {
-			continue
-		}
-		rl.DrawTextureEx(e.base_texture, entity_get_position(e), e.rotation, e.scale, rl.WHITE)
-		// rl.DrawRectangleV(entity_get_position(ent), entity_get_size(ent), rl.RED)
-	}
+			// Get memory offset position for next frame data in image.data
+			nextFrameDataOffset = gImage.width * gImage.height * 4 * currentAnimFrame
 
-	for p in g.projectiles {
-		if p.state.is_dead {
-			continue
+			x: [^]byte
+			x = ([^]byte)(gImage.data)
+			ptr = mem.ptr_offset(x, nextFrameDataOffset)
+			rl.UpdateTexture(scarfy, ptr)
+			frameCounter = 0
 		}
-		rl.DrawTextureEx(
-			p.base_texture,
-			entity_get_position(p.entity),
-			p.rotation,
-			p.scale,
+	} else if false {
+		for e in g.entities {
+			if e.state.is_dead {
+				continue
+			}
+			texture, ok := anime.get_current_texture(g.player.animemory)
+			if !ok {
+				rl.DrawRectangleRec(g.player.rects.outermost, rl.PINK)
+			} else {
+				rl.DrawTextureV(texture, get_player_pos(), rl.WHITE)
+			}
+		}
+	} else {
+		rl.DrawRectangle(-34, -34, 20, 20, rl.RED)
+		rl.DrawRectangle(0, 0, 20, 20, rl.RED)
+		for b in g.obstacles {
+			rl.DrawRectangleV(b, {f32(TILE_SIZE), f32(TILE_SIZE)}, rl.GREEN)
+		}
+		rl.DrawRectangle(0, 0, PIXEL_WINDOW_HEIGHT, 20, rl.BLUE)
+		rl.DrawTexturePro(
+			g.player.base_texture,
+			g.player.rects.outermost,
+			g.player.rects.outermost,
+			{0, 0},
+			0,
 			rl.WHITE,
 		)
-	}
 
-	if g.player.flags.can_parry {
-		for p in g.player.collided_with {
-			rl.DrawRectangleLinesEx(p.rects.outermost, 2, rl.ORANGE)
+		for e in g.entities {
+			if e.state.is_dead {
+				continue
+			}
+			texture, ok := anime.get_current_texture(e.animate.memory)
+			if !ok {
+				rl.DrawRectangleRec(g.player.rects.outermost, rl.BROWN)
+			} else {
+				rl.DrawTextureV(texture, get_player_pos(), rl.WHITE)
+			}
 		}
-	}
 
-	if g.player.rects.core.is_colliding {
-		rl.ClearBackground(rl.RED)
-	}
-
-	if g.player.rects.parry.is_action {
-		rl.DrawRectangleV(get_player_pos(), {20, 20}, rl.PURPLE)
-	}
-
-	if g.is_debug_mode {
-		render_debug()
-	}
-
-
-	for a in g.player.attacks {
-		if a.state.is_dead {
-			continue
+		for p in g.projectiles {
+			if p.state.is_dead {
+				continue
+			}
+			rl.DrawTextureEx(
+				p.base_texture,
+				entity_get_position(p.entity),
+				p.rotation,
+				p.scale,
+				rl.WHITE,
+			)
 		}
-		for i in 0 ..< 5 {
-			pos := entity_get_position(a.entity)
-			pos.x += f32(i)
-			tint := a.tint
-			// tint[3] -= u8(i) / 4
-			scale := a.scale
-			// scale -= f32(i) / 8
-			rl.DrawTextureEx(a.base_texture, pos, a.rotation, scale, tint)
-		}
-	}
 
+		if g.player.flags.can_parry {
+			for p in g.player.collided_with {
+				rl.DrawRectangleLinesEx(p.rects.outermost, 2, rl.ORANGE)
+			}
+		}
+
+		if g.player.rects.core.is_colliding {
+			rl.ClearBackground(rl.RED)
+		}
+
+		if g.player.rects.parry.is_action {
+			rl.DrawRectangleV(get_player_pos(), {20, 20}, rl.PURPLE)
+		}
+
+		if g.is_debug_mode {
+			render_debug()
+		}
+
+
+		for a in g.player.attacks {
+			if a.state.is_dead {
+				continue
+			}
+			for i in 0 ..< 5 {
+				pos := entity_get_position(a.entity)
+				pos.x += f32(i)
+				tint := a.tint
+				// tint[3] -= u8(i) / 4
+				scale := a.scale
+				// scale -= f32(i) / 8
+				rl.DrawTextureEx(a.base_texture, pos, a.rotation, scale, tint)
+			}
+		}
+
+	}
 }
 
 draw :: proc() {
@@ -784,6 +836,7 @@ game_update :: proc() {
 	draw()
 
 	g.debug.messages = nil
+	gl.clear()
 	// Everything on tracking allocator is valid until end-of-frame.
 	free_all(context.temp_allocator)
 }
@@ -801,13 +854,17 @@ game_init_window :: proc() {
 game_init :: proc() {
 	g = new(Game_Memory)
 
-	player_texture := rl.LoadTexture("assets/witch.png")
+
+	player_animemory := anime.new_memory("player")
+	anime.insert_animation(&player_animemory, "assets/idle.gif", "idle")
+	anime.set_animation(&player_animemory, "idle")
+
 	sparkle_texture := rl.LoadTexture("assets/sparkle.png")
 	projectile_texture := rl.LoadTexture("assets/computer.png")
-	rainbow_texture := rl.LoadTexture("assets/msn-emoticons/original/rainbow.png")
 
 	player_idle_texture_atlas := rl.LoadTexture("assets/twi.png")
 	center := screen_center()
+	player_texture, _ := anime.get_current_texture(player_animemory)
 
 	width := f32(player_texture.width)
 	height := f32(player_texture.height)
@@ -815,6 +872,7 @@ game_init :: proc() {
 	rects := entity_generate_rectangles(center, width, height)
 
 	player: Player = {
+		animate = {memory = player_animemory, current = "idle"},
 		rects = rects,
 		auto_speed = {0.12, 0},
 		hex_channels = {{15, 15, 15, 255}},
@@ -826,12 +884,12 @@ game_init :: proc() {
 			idle = {
 				animation = {
 					//
-					duration      = 0.15,
-					duration_left = 0.15,
-					current       = 0,
-					last          = 2,
+					// duration      = 0.15,
+					// duration_left = 0.15,
+					// current       = 0,
+					// last          = 2,
 				},
-				texture = player_idle_texture_atlas,
+				texture   = player_idle_texture_atlas,
 			},
 		},
 	}
@@ -843,7 +901,7 @@ game_init :: proc() {
 		player        = player,
 		run           = true,
 		some_number   = 100,
-		entities      = {new_entity({0, 0}, rainbow_texture)},
+		entities      = {player},
 		projectiles   = {
 			new_random_projectile(projectile_texture, 0),
 			new_random_projectile(projectile_texture, 1),
