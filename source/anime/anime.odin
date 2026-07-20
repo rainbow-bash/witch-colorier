@@ -61,7 +61,7 @@ update_current :: proc(self: ^Anime) -> Error {
 	return .None
 }
 
-new_memory :: proc() -> Anime {
+new_anime :: proc() -> Anime {
 	return {animations = make(map[string]Animation), current = ""}
 }
 
@@ -72,7 +72,7 @@ insert_animation :: proc(
 	name: string,
 	frame_delay: i32 = 8,
 	set_animation := true,
-) {
+) -> rl.Texture {
 	total_frames: i32
 	img := rl.LoadImageAnim(filepath, &total_frames)
 	texture := rl.LoadTextureFromImage(img)
@@ -97,6 +97,8 @@ insert_animation :: proc(
 		self.current = name
 	}
 
+
+	return texture
 }
 
 use_animation :: proc(self: ^Anime, name: string) {
@@ -112,4 +114,12 @@ get_current_texture :: proc(self: Anime) -> (rl.Texture, Error) {
 	}
 
 	return animation.texture, .None
+}
+
+get_current_texture_dimensions :: proc(self: Anime) -> ([2]i32, Error) {
+	texture, err := get_current_texture(self)
+	if err != nil {
+		return {}, err
+	}
+	return {texture.width, texture.height}, .None
 }

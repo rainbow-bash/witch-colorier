@@ -4,7 +4,7 @@ import "core:fmt"
 import rl "vendor:raylib"
 
 main :: proc() {
-	mem := anime.new_memory()
+	mem := anime.new_anime()
 	size: i32 = 720
 	rl.InitWindow(size, size, "hello")
 	rl.SetTargetFPS(60) // Set our game to run at 60 frames-per-second

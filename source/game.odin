@@ -117,7 +117,7 @@ Entity :: struct {
 	name:          string,
 	kind:          Entity_Kind,
 	auto_speed:    rl.Vector2,
-	textures:      []rl.Texture,
+	movement:      rl.Vector2,
 	animate:       anime.Anime,
 	rects:         Entity_Rectangles,
 	health:        int,
@@ -194,7 +194,7 @@ entity_generate_rectangles :: proc(pos: rl.Vector2, width: f32, height: f32) -> 
 	}
 }
 
-entity_get_position :: proc(entity: Entity) -> rl.Vector2 {
+entity_get_position :: proc(entity: ^Entity) -> rl.Vector2 {
 	return {entity.rects.outermost.x, entity.rects.outermost.y}
 }
 
@@ -202,7 +202,7 @@ entity_get_size :: proc(entity: Entity) -> rl.Vector2 {
 	return {entity.rects.outermost.width, entity.rects.outermost.height}
 }
 
-entity_draw_rects :: proc(entity: Entity) {
+entity_draw_rects :: proc(entity: ^Entity) {
 	if entity.state.is_dead {
 		return
 	}
@@ -248,17 +248,20 @@ entity_update_collision_state :: proc(self: ^Entity) {
 		is_colliding := false
 		collided_with: [dynamic]^Entity
 
-		for &other in g.entities {
+		for other in g.entities {
+			if other == self {
+				continue
+			}
 			is, lc := entity_check_collision(
 				self, //
 				&self.rects.parry,
-				&other,
+				other,
 				&other.rects.core,
 			)
 			if is {
 				last_collision = lc
 				is_colliding = is
-				append(&collided_with, &other)
+				append(&collided_with, other)
 			}
 		}
 		self.rects.parry.is_colliding = is_colliding
@@ -269,8 +272,8 @@ entity_update_collision_state :: proc(self: ^Entity) {
 	}
 }
 
-entity_update_position :: proc(entity: ^Entity, input: rl.Vector2) {
-	movement := (input * rl.GetFrameTime() * 50)
+entity_update_position :: proc(entity: ^Entity) {
+	movement := (entity.movement * rl.GetFrameTime() * 50)
 
 	x := movement.x
 	y := movement.y
@@ -295,10 +298,12 @@ Projectile :: struct {
 	using entity: Entity,
 }
 
-new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
+new_random_projectile :: proc(i := 0) -> ^Projectile {
 	// position := rl.GetScreenToWorld2D({f32(rand.int63()), f32(rand.int63())})
 	// w := f32(rl.GetScreenWidth())
-	position: rl.Vector2 = get_player_pos()
+	animate := anime.new_anime()
+	texture := anime.insert_animation(&animate, "assets/computer.png", "idle")
+	position: rl.Vector2 = {0, 0}
 	position.x += f32(texture.width) * 2.0
 	position.y += f32(texture.height * i32(i))
 	scale: f32 = 0.5
@@ -312,25 +317,30 @@ new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 	g := u8(rand.uint32())
 	b := u8(rand.uint32())
 
-	return {
+
+	p := new(Projectile)
+	p^ = Projectile {
 		rects = rects,
+		animate = animate,
 		state = {death_duration = time.Millisecond * PROJECTILE_DEATH_DURATION},
 		health = 1,
 		scale = scale,
 		hex = {r, g, b, 0},
 		auto_speed = 0.15,
 	}
+
+	return p
 }
 
 Game_Memory :: struct {
 	debug:         ^Debug,
 	is_debug_mode: bool,
 	is_paused:     bool,
-	player:        Player,
+	player:        ^Player,
 	camera_pos:    rl.Vector2,
 	obstacles:     [24]rl.Vector2,
 	projectiles:   [3]Projectile,
-	entities:      [dynamic]Entity,
+	entities:      [dynamic]^Entity,
 	camera_speed:  f32,
 	some_number:   int,
 	run:           bool,
@@ -416,9 +426,8 @@ render_debug_f3 :: proc() {
 }
 
 render_debug :: proc() {
-	entity_draw_rects(g.player.entity)
-	for p in g.projectiles {
-		entity_draw_rects(p.entity)
+	for ent in g.entities {
+		entity_draw_rects(ent)
 	}
 }
 
@@ -557,94 +566,27 @@ update :: proc() {
 		return
 	}
 
-	entity_update_position(&g.player.entity, input)
+	// entity_update_position(&g.player.entity, input)
+	g.player.entity.movement = input
 
-	for &ent in g.entities {
-		entity_update_collision_state(&ent)
+	for ent in g.entities {
+		// update collisions
+		entity_update_collision_state(ent)
+		// update animations
 		err := anime.update_current(&ent.animate)
 		if err != nil {
 			gl.msg("%#v", err)
 		}
+		// update position
+		entity_update_position(ent)
 	}
 	// anime.update(&animem, "idle")
 
-	for &p in g.projectiles {
-		entity_update_position(&p.entity, {-p.auto_speed.x, 0})
-	}
-
-	for &a in g.player.attacks {
-		entity_update_position(&a.entity, {a.auto_speed.x, 0})
-		a.rotation = f32((int(a.rotation + 1)) % 360)
-	}
 	update_debug()
 	// anime.update_animation(&g.player.animations.idle.animation)
 
 
-	// g.player.rects.parry.is_colliding = false
-	// g.player.rects.parry.last_collision = time.Time{}
-
-	g.player.collided_with = nil
-	{
-		// colliding_entity: ^Entity
-		last_collision: time.Time
-		is_colliding := false
-		collided_with: [dynamic]^Projectile
-
-		for &p in g.projectiles {
-			is, lc := entity_check_collision(
-				&g.player.entity, //
-				&g.player.rects.parry,
-				&p,
-				&p.rects.core,
-			)
-			if is {
-				last_collision = lc
-				is_colliding = is
-				append(&collided_with, &p)
-			}
-		}
-		g.player.rects.parry.is_colliding = is_colliding
-		g.player.rects.parry.last_collision = last_collision
-		for ent in collided_with {
-			append(&g.player.collided_with, ent)
-		}
-	}
-
-	{
-		last_collision: time.Time
-		is_colliding := false
-		rect := &g.player.rects.outermost
-		collided_with: [dynamic]^Projectile
-		for &p in g.projectiles {
-			is, lc := entity_check_collision(
-				&g.player.entity, //
-				rect,
-				&p,
-				&p.rects.core,
-			)
-			if is {
-				is_colliding = is
-				last_collision = lc
-				append(&collided_with, &p)
-			}
-		}
-		rect.is_colliding = is_colliding
-		rect.last_collision = last_collision
-		for ent in collided_with {
-			append(&g.player.collided_with, ent)
-		}
-	}
-
-	parry_dt := time.since(g.player.rects.parry.last_collision)
-	core_parry_dt := time.since(g.player.rects.core.last_collision)
-
-	can_parry :=
-		(parry_dt < 300 * time.Millisecond && g.player.rects.parry.is_colliding) ||
-		(core_parry_dt < 100 * time.Millisecond && g.player.rects.core.is_colliding)
-
-	g.player.flags.can_parry = can_parry
-
-
+	can_parry := false
 	if rl.IsKeyDown(.L) && can_parry {
 		g.player.rects.parry.is_action = true
 		for &ent in g.player.collided_with {
@@ -676,6 +618,7 @@ scarfy := rl.LoadTextureFromImage(gImage)
 ptr: [^]byte
 
 render :: proc() {
+
 	for e in g.entities {
 		if e.state.is_dead {
 			continue
@@ -684,7 +627,7 @@ render :: proc() {
 		if err != nil {
 			rl.DrawRectangleRec(g.player.rects.outermost, rl.BROWN)
 		} else {
-			rl.DrawTextureV(texture, get_player_pos(), rl.WHITE)
+			rl.DrawTextureEx(texture, entity_get_position(e), e.rotation, e.scale, rl.WHITE)
 		}
 	}
 
@@ -767,21 +710,21 @@ game_init :: proc() {
 	g = new(Game_Memory)
 
 
-	player_animations := anime.new_memory()
+	player_animations := anime.new_anime()
 	anime.insert_animation(&player_animations, "assets/idle.gif", "idle")
 
 	sparkle_texture := rl.LoadTexture("assets/sparkle.png")
-	projectile_texture := rl.LoadTexture("assets/computer.png")
 
 	center := screen_center()
-	player_texture, _ := anime.get_current_texture(player_animations)
+	dimensions, _ := anime.get_current_texture_dimensions(player_animations)
 
-	width := f32(player_texture.width)
-	height := f32(player_texture.height)
+	width := f32(dimensions.x)
+	height := f32(dimensions.y)
 
 	rects := entity_generate_rectangles(center, width, height)
 
-	player: Player = {
+	player := new(Player)
+	player^ = {
 		animate             = player_animations,
 		rects               = rects,
 		auto_speed          = {0.12, 0},
@@ -789,6 +732,7 @@ game_init :: proc() {
 		health              = 0xF,
 		max_health          = 0xF,
 		attack_ball_texture = sparkle_texture,
+		scale               = 1,
 	}
 
 
@@ -798,12 +742,17 @@ game_init :: proc() {
 		player        = player,
 		run           = true,
 		some_number   = 100,
-		entities      = {player},
-		projectiles   = {
-			new_random_projectile(projectile_texture, 0),
-			new_random_projectile(projectile_texture, 1),
-			new_random_projectile(projectile_texture, 2),
+		entities      = {
+			player,
+			new_random_projectile(0),
+			// new_random_projectile(projectile_texture, 1),
+			// new_random_projectile(projectile_texture, 2),
 		},
+		// projectiles   = {
+		// 	new_random_projectile(projectile_texture, 0),
+		// 	new_random_projectile(projectile_texture, 1),
+		// 	new_random_projectile(projectile_texture, 2),
+		// },
 		// You can put textures, sounds and music in the `assets` folder. Those
 		// files will be part any release or web build.
 		zoom          = 1,
