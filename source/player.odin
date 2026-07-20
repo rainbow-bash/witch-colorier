@@ -12,7 +12,6 @@ Player :: struct {
 	attack_ball_texture: rl.Texture,
 	hex_channels:        [1]rl.Color,
 	attacks:             [dynamic]Attack,
-	texture:             rl.Texture,
 }
 
 // TODO: make a trail for the shooting
@@ -29,13 +28,12 @@ player_attack :: proc(kind: Entity_Kind) {
 		&g.player.attacks,
 		Attack {
 			//
-			kind         = kind,
-			rects        = rects,
-			auto_speed   = {1, 0},
-			tint         = tint,
-			scale        = 0.4,
-			rotation     = 0.7,
-			base_texture = g.player.attack_ball_texture,
+			kind       = kind,
+			rects      = rects,
+			auto_speed = {1, 0},
+			tint       = tint,
+			scale      = 0.4,
+			rotation   = 0.7,
 		},
 	)
 	player_sub_hex_color({16, 16, 16, 0})

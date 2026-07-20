@@ -33,7 +33,6 @@ import "./anime"
 import "core:fmt"
 import "core:math/linalg"
 import "core:math/rand"
-import "core:mem"
 import "core:strings"
 import "core:time"
 import gl "debug"
@@ -84,6 +83,14 @@ Entity_Action_State :: enum {
 	ENDED,
 }
 
+Mode :: enum {
+	NIL,
+	DEBUG,
+	GAME,
+}
+
+mode: Mode = .GAME
+
 Entity_State :: struct {
 	start:          time.Time,
 	action:         Entity_Action_State,
@@ -91,23 +98,6 @@ Entity_State :: struct {
 	is_dead:        bool,
 }
 
-Entity_Animation :: struct {
-	using animation: anime.Animation,
-	frame_width:     f32,
-	frame_heigth:    f32,
-}
-
-Entity_Animations :: struct {
-	idle:    Entity_Animation,
-	running: Entity_Animation,
-	dying:   Entity_Animation,
-	emote:   Entity_Animation,
-}
-
-Entity_Animation2 :: struct {
-	memory:  anime.Animemory,
-	current: string,
-}
 
 Flags :: struct {
 	can_parry: bool,
@@ -124,24 +114,21 @@ Entity_Kind :: enum {
 Render :: struct {}
 
 Entity :: struct {
-	kind:            Entity_Kind,
-	auto_speed:      rl.Vector2,
-	textures:        []rl.Texture,
-	animations:      Entity_Animations,
-	animate:         Entity_Animation2,
-	base_texture:    rl.Texture,
-	dying_animation: []rl.Texture,
-	rects:           Entity_Rectangles,
-	health:          int,
-	max_health:      int,
-	collided_with:   [dynamic]^Entity,
-	state:           Entity_State,
-	animemory:       anime.Animemory,
-	scale:           f32,
-	tint:            rl.Color,
-	flags:           Flags,
-	rotation:        f32,
-	hex:             rl.Color,
+	name:          string,
+	kind:          Entity_Kind,
+	auto_speed:    rl.Vector2,
+	textures:      []rl.Texture,
+	animate:       anime.Anime,
+	rects:         Entity_Rectangles,
+	health:        int,
+	max_health:    int,
+	collided_with: [dynamic]^Entity,
+	state:         Entity_State,
+	scale:         f32,
+	tint:          rl.Color,
+	flags:         Flags,
+	rotation:      f32,
+	hex:           rl.Color,
 }
 
 new_entity :: proc(position: rl.Vector2, texture: rl.Texture, i := 0) -> Entity {
@@ -166,7 +153,6 @@ new_entity :: proc(position: rl.Vector2, texture: rl.Texture, i := 0) -> Entity 
 		scale = scale,
 		hex = {r, g, b, 0},
 		auto_speed = 0.15,
-		base_texture = texture,
 	}
 
 	return ent
@@ -333,7 +319,6 @@ new_random_projectile :: proc(texture: rl.Texture, i := 0) -> Projectile {
 		scale = scale,
 		hex = {r, g, b, 0},
 		auto_speed = 0.15,
-		base_texture = texture,
 	}
 }
 
@@ -427,7 +412,7 @@ draw_text_rect :: proc(
 }
 
 render_debug_f3 :: proc() {
-	gl.render()
+	gl.render_messages()
 }
 
 render_debug :: proc() {
@@ -576,7 +561,7 @@ update :: proc() {
 
 	for &ent in g.entities {
 		entity_update_collision_state(&ent)
-		err := anime.update(&ent.animate.memory, ent.animate.memory.current)
+		err := anime.update_current(&ent.animate)
 		if err != nil {
 			gl.msg("%#v", err)
 		}
@@ -691,112 +676,35 @@ scarfy := rl.LoadTextureFromImage(gImage)
 ptr: [^]byte
 
 render :: proc() {
-	if false {
-		frameCounter += 1
-		if (frameCounter >= frameDelay) {
-			// Move to next frame
-			// NOTE: If final frame is reached we return to first frame
-			currentAnimFrame += 1
-			if (currentAnimFrame >= animFrames) {
-				currentAnimFrame = 0
-			}
-
-			// Get memory offset position for next frame data in image.data
-			nextFrameDataOffset = gImage.width * gImage.height * 4 * currentAnimFrame
-
-			x: [^]byte
-			x = ([^]byte)(gImage.data)
-			ptr = mem.ptr_offset(x, nextFrameDataOffset)
-			rl.UpdateTexture(scarfy, ptr)
-			frameCounter = 0
+	for e in g.entities {
+		if e.state.is_dead {
+			continue
 		}
-	} else if false {
-		for e in g.entities {
-			if e.state.is_dead {
-				continue
-			}
-			texture, ok := anime.get_current_texture(g.player.animemory)
-			if !ok {
-				rl.DrawRectangleRec(g.player.rects.outermost, rl.PINK)
-			} else {
-				rl.DrawTextureV(texture, get_player_pos(), rl.WHITE)
-			}
+		texture, err := anime.get_current_texture(e.animate)
+		if err != nil {
+			rl.DrawRectangleRec(g.player.rects.outermost, rl.BROWN)
+		} else {
+			rl.DrawTextureV(texture, get_player_pos(), rl.WHITE)
 		}
-	} else {
-		rl.DrawRectangle(-34, -34, 20, 20, rl.RED)
-		rl.DrawRectangle(0, 0, 20, 20, rl.RED)
-		for b in g.obstacles {
-			rl.DrawRectangleV(b, {f32(TILE_SIZE), f32(TILE_SIZE)}, rl.GREEN)
-		}
-		rl.DrawRectangle(0, 0, PIXEL_WINDOW_HEIGHT, 20, rl.BLUE)
-		rl.DrawTexturePro(
-			g.player.base_texture,
-			g.player.rects.outermost,
-			g.player.rects.outermost,
-			{0, 0},
-			0,
-			rl.WHITE,
-		)
-
-		for e in g.entities {
-			if e.state.is_dead {
-				continue
-			}
-			texture, ok := anime.get_current_texture(e.animate.memory)
-			if !ok {
-				rl.DrawRectangleRec(g.player.rects.outermost, rl.BROWN)
-			} else {
-				rl.DrawTextureV(texture, get_player_pos(), rl.WHITE)
-			}
-		}
-
-		for p in g.projectiles {
-			if p.state.is_dead {
-				continue
-			}
-			rl.DrawTextureEx(
-				p.base_texture,
-				entity_get_position(p.entity),
-				p.rotation,
-				p.scale,
-				rl.WHITE,
-			)
-		}
-
-		if g.player.flags.can_parry {
-			for p in g.player.collided_with {
-				rl.DrawRectangleLinesEx(p.rects.outermost, 2, rl.ORANGE)
-			}
-		}
-
-		if g.player.rects.core.is_colliding {
-			rl.ClearBackground(rl.RED)
-		}
-
-		if g.player.rects.parry.is_action {
-			rl.DrawRectangleV(get_player_pos(), {20, 20}, rl.PURPLE)
-		}
-
-		if g.is_debug_mode {
-			render_debug()
-		}
+	}
 
 
-		for a in g.player.attacks {
-			if a.state.is_dead {
-				continue
-			}
-			for i in 0 ..< 5 {
-				pos := entity_get_position(a.entity)
-				pos.x += f32(i)
-				tint := a.tint
-				// tint[3] -= u8(i) / 4
-				scale := a.scale
-				// scale -= f32(i) / 8
-				rl.DrawTextureEx(a.base_texture, pos, a.rotation, scale, tint)
-			}
+	if g.player.flags.can_parry {
+		for p in g.player.collided_with {
+			rl.DrawRectangleLinesEx(p.rects.outermost, 2, rl.ORANGE)
 		}
+	}
 
+	if g.player.rects.core.is_colliding {
+		rl.ClearBackground(rl.RED)
+	}
+
+	if g.player.rects.parry.is_action {
+		rl.DrawRectangleV(get_player_pos(), {20, 20}, rl.PURPLE)
+	}
+
+	if g.is_debug_mode {
+		render_debug()
 	}
 }
 
@@ -806,7 +714,11 @@ draw :: proc() {
 
 
 	rl.BeginMode2D(game_camera())
-	render()
+	if (mode == .DEBUG) {
+		gl.render()
+	} else {
+		render()
+	}
 	rl.EndMode2D()
 
 	// NOTE: `fmt.ctprintf` uses the temp allocator. The temp allocator is
@@ -855,16 +767,14 @@ game_init :: proc() {
 	g = new(Game_Memory)
 
 
-	player_animemory := anime.new_memory("player")
-	anime.insert_animation(&player_animemory, "assets/idle.gif", "idle")
-	anime.set_animation(&player_animemory, "idle")
+	player_animations := anime.new_memory()
+	anime.insert_animation(&player_animations, "assets/idle.gif", "idle")
 
 	sparkle_texture := rl.LoadTexture("assets/sparkle.png")
 	projectile_texture := rl.LoadTexture("assets/computer.png")
 
-	player_idle_texture_atlas := rl.LoadTexture("assets/twi.png")
 	center := screen_center()
-	player_texture, _ := anime.get_current_texture(player_animemory)
+	player_texture, _ := anime.get_current_texture(player_animations)
 
 	width := f32(player_texture.width)
 	height := f32(player_texture.height)
@@ -872,26 +782,13 @@ game_init :: proc() {
 	rects := entity_generate_rectangles(center, width, height)
 
 	player: Player = {
-		animate = {memory = player_animemory, current = "idle"},
-		rects = rects,
-		auto_speed = {0.12, 0},
-		hex_channels = {{15, 15, 15, 255}},
-		health = 0xF,
-		max_health = 0xF,
-		texture = player_texture,
+		animate             = player_animations,
+		rects               = rects,
+		auto_speed          = {0.12, 0},
+		hex_channels        = {{15, 15, 15, 255}},
+		health              = 0xF,
+		max_health          = 0xF,
 		attack_ball_texture = sparkle_texture,
-		animations = {
-			idle = {
-				animation = {
-					//
-					// duration      = 0.15,
-					// duration_left = 0.15,
-					// current       = 0,
-					// last          = 2,
-				},
-				texture   = player_idle_texture_atlas,
-			},
-		},
 	}
 
 

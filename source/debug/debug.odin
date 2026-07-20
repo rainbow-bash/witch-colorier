@@ -48,6 +48,9 @@ reset :: proc() {
 }
 
 render :: proc() {
+}
+
+render_messages :: proc() {
 	y: i32 = 0
 	font_size: i32 = 12
 	{

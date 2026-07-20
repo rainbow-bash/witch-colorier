@@ -13,25 +13,28 @@ Animation :: struct {
 	total_frames:  i32,
 }
 
-Animemory :: struct {
-	owner:      string,
-	current:    string,
+
+Anime :: struct {
 	animations: map[string]Animation,
+	current:    string,
 }
 
 Error :: enum {
 	None,
+	NoAnimationsHashmapForThisOwner,
 	NoAnimationsHashmap,
+	NoAnimationForCurrentAnimationOrCurrentAnimationIsEmptyString,
 	NoAnimationForThatName,
 }
 
-update :: proc(self: ^Animemory, name: string) -> Error {
-	if nil == self.animations {
+update_current :: proc(self: ^Anime) -> Error {
+	if nil == self {
 		return .NoAnimationsHashmap
 	}
-	this, ok := &self.animations[name]
+
+	this, ok := &self.animations[self.current]
 	if !ok {
-		return .NoAnimationForThatName
+		return .NoAnimationForCurrentAnimationOrCurrentAnimationIsEmptyString
 	}
 	this.frame_counter += 1
 	if (this.frame_counter >= this.frame_delay) {
@@ -58,14 +61,29 @@ update :: proc(self: ^Animemory, name: string) -> Error {
 	return .None
 }
 
-new_memory :: proc(owner: string) -> Animemory {
-	return {owner = owner, animations = make(map[string]Animation)}
+new_memory :: proc() -> Anime {
+	return {animations = make(map[string]Animation), current = ""}
 }
 
-insert_animation :: proc(self: ^Animemory, filepath: cstring, name: string, frame_delay: i32 = 8) {
+//
+insert_animation :: proc(
+	self: ^Anime,
+	filepath: cstring,
+	name: string,
+	frame_delay: i32 = 8,
+	set_animation := true,
+) {
 	total_frames: i32
 	img := rl.LoadImageAnim(filepath, &total_frames)
 	texture := rl.LoadTextureFromImage(img)
+
+	old, ok := self.animations[name]
+
+	if ok {
+		rl.UnloadTexture(old.texture)
+		rl.UnloadImage(old.img)
+	}
+
 	self.animations[name] = Animation {
 		img           = img,
 		texture       = texture,
@@ -74,20 +92,24 @@ insert_animation :: proc(self: ^Animemory, filepath: cstring, name: string, fram
 		frame_delay   = frame_delay,
 		total_frames  = total_frames,
 	}
-}
 
-set_animation :: proc(self: ^Animemory, name: string) -> bool {
-	_, ok := self.animations[name]
-	if ok {
+	if set_animation {
 		self.current = name
 	}
-	return ok
+
 }
 
-get_current_texture :: proc(self: Animemory) -> (rl.Texture, bool) {
+use_animation :: proc(self: ^Anime, name: string) {
+	self.current = name
+}
+
+get_current_texture :: proc(self: Anime) -> (rl.Texture, Error) {
+
 	animation, ok := self.animations[self.current]
+
 	if !ok {
-		return {}, false
+		return {}, .NoAnimationForThatName
 	}
-	return animation.texture, true
+
+	return animation.texture, .None
 }
