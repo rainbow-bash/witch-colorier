@@ -101,6 +101,13 @@ insert_animation :: proc(
 	return texture
 }
 
+clean :: proc(self: ^Anime) {
+	for k, v in self.animations {
+		rl.UnloadTexture(v.texture)
+		rl.UnloadImage(v.img)
+	}
+}
+
 use_animation :: proc(self: ^Anime, name: string) {
 	self.current = name
 }

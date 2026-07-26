@@ -1,4 +1,6 @@
 package game
+import "./anime"
+import gl "./debug"
 import rl "vendor:raylib"
 
 
@@ -8,27 +10,29 @@ Attack :: struct {
 
 
 Player :: struct {
-	using entity:        Entity,
-	attack_ball_texture: rl.Texture,
-	hex_channels:        [1]rl.Color,
-	attacks:             [dynamic]Attack,
+	using entity:  Entity,
+	hex_channels:  [1]rl.Color,
+	attacks:       [dynamic]Attack,
+	attacks_anime: anime.Anime,
 }
 
 // TODO: make a trail for the shooting
 // rl.IsKeyPressed(.SPACE)
 player_attack :: proc(kind: Entity_Kind) {
-	width := f32(g.player.attack_ball_texture.width)
-	height := f32(g.player.attack_ball_texture.height)
-
+	size, err := anime.get_current_texture_dimensions(g.player.attacks_anime)
+	if err != nil {
+		gl.persist("%#v", err)
+		return
+	}
 	pos := get_player_attack_position()
-	debug("%#v", pos)
-	rects := entity_generate_rectangles(pos, width, height)
+	rects := entity_generate_rectangles(pos, f32(size.x), f32(size.y))
 	tint := g.player.hex_channels[0]
 	append(
 		&g.player.attacks,
 		Attack {
 			//
-			kind       = kind,
+			parent     = g.player,
+			kind       = .RAY,
 			rects      = rects,
 			auto_speed = {1, 0},
 			tint       = tint,

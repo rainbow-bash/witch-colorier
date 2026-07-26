@@ -111,15 +111,23 @@ Entity_Kind :: enum {
 	RAY,
 }
 
+Entity_Family :: enum {
+	MANE_SIX,
+	MSN_MESSENGER,
+}
+
 Render :: struct {}
 
 Entity :: struct {
 	name:          string,
+	core_damage:   int,
 	kind:          Entity_Kind,
+	parry_time:    time.Duration,
 	auto_speed:    rl.Vector2,
 	movement:      rl.Vector2,
 	animate:       anime.Anime,
 	rects:         Entity_Rectangles,
+	family:        Entity_Family,
 	health:        int,
 	max_health:    int,
 	collided_with: [dynamic]^Entity,
@@ -129,6 +137,7 @@ Entity :: struct {
 	flags:         Flags,
 	rotation:      f32,
 	hex:           rl.Color,
+	parent:        ^Entity,
 }
 
 new_entity :: proc(position: rl.Vector2, texture: rl.Texture, i := 0) -> Entity {
@@ -158,12 +167,20 @@ new_entity :: proc(position: rl.Vector2, texture: rl.Texture, i := 0) -> Entity 
 	return ent
 }
 
+Collision_Rect_Kind :: enum {
+	OUTERMOST,
+	PARRY,
+	CORE,
+}
+
 Collision_Rect :: struct {
 	using rect:     rl.Rectangle,
+	kind:           Collision_Rect_Kind,
 	last_collision: time.Time,
 	target:         ^Entity,
 	is_colliding:   bool,
 	is_action:      bool,
+	collided_with:  [dynamic]^Entity,
 }
 
 Entity_Rectangles :: struct {
@@ -188,9 +205,9 @@ entity_generate_rectangles :: proc(pos: rl.Vector2, width: f32, height: f32) -> 
 	par_y := y + (height / 2 - par_h / 2)
 
 	return {
-		outermost = {rect = {x, y, width, height}},
-		parry = {rect = {par_x, par_y, par_w, par_h}},
-		core = {rect = {col_x, col_y, col_w, col_h}},
+		outermost = {rect = {x, y, width, height}, kind = .OUTERMOST},
+		parry = {rect = {par_x, par_y, par_w, par_h}, kind = .PARRY},
+		core = {rect = {col_x, col_y, col_w, col_h}, kind = .CORE},
 	}
 }
 
@@ -242,7 +259,12 @@ entity_check_collision :: proc(
 	return did_collide, last_hit
 }
 
-entity_update_collision_state :: proc(self: ^Entity) {
+entity_update_collision_state :: proc(
+	self: ^Entity,
+	self_rect: ^Collision_Rect,
+	target_rect_kind: Collision_Rect_Kind,
+) {
+	gl.msg("%#v", self_rect)
 	{
 		last_collision: time.Time
 		is_colliding := false
@@ -252,20 +274,31 @@ entity_update_collision_state :: proc(self: ^Entity) {
 			if other == self {
 				continue
 			}
+			target_rect: ^Collision_Rect
+			switch (target_rect_kind) {
+			case .OUTERMOST:
+				target_rect = &other.rects.outermost
+			case .PARRY:
+				target_rect = &other.rects.parry
+			case .CORE:
+				target_rect = &other.rects.core
+			}
 			is, lc := entity_check_collision(
 				self, //
-				&self.rects.parry,
+				self_rect,
 				other,
-				&other.rects.core,
+				target_rect,
 			)
 			if is {
 				last_collision = lc
 				is_colliding = is
 				append(&collided_with, other)
 			}
+			target_rect.last_collision = last_collision
+			self_rect.last_collision = last_collision
+			gl.msg("%#v", time.since(last_collision))
 		}
-		self.rects.parry.is_colliding = is_colliding
-		self.rects.parry.last_collision = last_collision
+		self_rect.is_colliding = is_colliding
 		for ent in collided_with {
 			append(&self.collided_with, ent)
 		}
@@ -332,8 +365,15 @@ new_random_projectile :: proc(i := 0) -> ^Projectile {
 	return p
 }
 
+Game_Flag :: enum {
+	SHOW_DEBUG_MESSAGES,
+}
+
+Game_Flags :: distinct bit_set[Game_Flag;int]
+
 Game_Memory :: struct {
 	debug:         ^Debug,
+	flags:         Game_Flags,
 	is_debug_mode: bool,
 	is_paused:     bool,
 	player:        ^Player,
@@ -341,6 +381,7 @@ Game_Memory :: struct {
 	obstacles:     [24]rl.Vector2,
 	projectiles:   [3]Projectile,
 	entities:      [dynamic]^Entity,
+	animes:        [dynamic]^anime.Anime,
 	camera_speed:  f32,
 	some_number:   int,
 	run:           bool,
@@ -422,7 +463,9 @@ draw_text_rect :: proc(
 }
 
 render_debug_f3 :: proc() {
-	gl.render_messages()
+	if .SHOW_DEBUG_MESSAGES in g.flags {
+		gl.render_messages()
+	}
 }
 
 render_debug :: proc() {
@@ -434,7 +477,9 @@ render_debug :: proc() {
 // TODO: make an ui context where the ui elements are stacked,
 //			 and everytime a rectangle is drawn add the height (column) or width (row) of that shape, so the next y or x in the current context gets updated to that
 render_ui :: proc() {
-	y := PIXEL_WINDOW_HEIGHT / 2 + PIXEL_WINDOW_HEIGHT / 3
+	end := int(rl.GetScreenToWorld2D({0, f32(rl.GetScreenHeight())}, ui_camera()).y)
+	y := end - HEX_SQUARE_HEIGHT * 3
+
 	{
 		health_width := ((g.player.health * HEALTH_BAR_WIDTH) / g.player.max_health)
 		draw_rect(0, y, HEALTH_BAR_WIDTH, 10, hexcode_to_color(0x2c2933))
@@ -442,6 +487,7 @@ render_ui :: proc() {
 		draw_text(fmt.aprintf("0x%2X", g.player.health), 0, y, 12, rl.WHITE)
 		y += TILE_SIZE
 	}
+
 	{
 		for hex, _ in g.player.hex_channels {
 			x := 0 * HEX_SQUARE_WIDTH
@@ -484,7 +530,7 @@ update_debug :: proc() {
 
 	if rl.GetMouseWheelMove() != 0 {
 		// g.camera_pos = rl.GetMousePosition()
-		zoom := rl.IsKeyDown(.LEFT_ALT)
+		zoom := rl.IsKeyDown(.LEFT_SHIFT)
 		if zoom {
 			y := rl.GetMouseWheelMove()
 			g.ui_zoom = g.ui_zoom + y
@@ -521,6 +567,10 @@ update_debug :: proc() {
 		if g.debug.is_dragging_player {
 			g.debug.is_dragging_player = false
 		}
+	}
+
+	if rl.IsKeyPressed(.F3) {
+		g.flags ~= Game_Flags{.SHOW_DEBUG_MESSAGES}
 	}
 
 }
@@ -571,7 +621,8 @@ update :: proc() {
 
 	for ent in g.entities {
 		// update collisions
-		entity_update_collision_state(ent)
+		entity_update_collision_state(ent, &ent.rects.parry, .OUTERMOST)
+		entity_update_collision_state(ent, &ent.rects.core, .OUTERMOST)
 		// update animations
 		err := anime.update_current(&ent.animate)
 		if err != nil {
@@ -585,17 +636,16 @@ update :: proc() {
 	update_debug()
 	// anime.update_animation(&g.player.animations.idle.animation)
 
+	parry := &g.player.rects.parry
 
-	can_parry := false
+	can_parry := time.since(parry.last_collision) < g.player.entity.parry_time
+
 	if rl.IsKeyDown(.L) && can_parry {
-		g.player.rects.parry.is_action = true
-		for &ent in g.player.collided_with {
-			ent.state.is_dead = true
-			player_add_hex_color(ent.hex)
-		}
-		// g.player.rects.parry.target.state.is_dead = true
+		parry.is_action = true
+		parry.target.state.is_dead = true
+		player_add_hex_color(parry.target.hex)
 	} else {
-		g.player.rects.parry.is_action = false
+		parry.is_action = false
 	}
 
 	if rl.IsKeyPressed(.K) {
@@ -671,8 +721,8 @@ draw :: proc() {
 	rl.BeginMode2D(ui_camera())
 	{
 		render_ui()
-		// if g.is_debug_mode {
-		// }
+		if g.is_debug_mode {
+		}
 		render_debug_f3()
 	}
 	rl.EndMode2D()
@@ -683,6 +733,7 @@ draw :: proc() {
 reset_memory :: proc() {
 	d = {}
 	game_init()
+
 }
 
 @(export)
@@ -711,9 +762,10 @@ game_init :: proc() {
 
 
 	player_animations := anime.new_anime()
-	anime.insert_animation(&player_animations, "assets/idle.gif", "idle")
+	sparkles_animations := anime.new_anime()
 
-	sparkle_texture := rl.LoadTexture("assets/sparkle.png")
+	anime.insert_animation(&player_animations, "assets/idle.gif", "idle")
+	anime.insert_animation(&sparkles_animations, "assets/sparkle.gif", "idle")
 
 	center := screen_center()
 	dimensions, _ := anime.get_current_texture_dimensions(player_animations)
@@ -725,18 +777,19 @@ game_init :: proc() {
 
 	player := new(Player)
 	player^ = {
-		animate             = player_animations,
-		rects               = rects,
-		auto_speed          = {0.12, 0},
-		hex_channels        = {{15, 15, 15, 255}},
-		health              = 0xF,
-		max_health          = 0xF,
-		attack_ball_texture = sparkle_texture,
-		scale               = 1,
+		animate      = player_animations,
+		rects        = rects,
+		auto_speed   = {0.12, 0},
+		hex_channels = {{15, 15, 15, 255}},
+		health       = 0xF,
+		max_health   = 0xF,
+		scale        = 1,
+		parry_time   = time.Millisecond * 500,
 	}
 
 
 	g^ = Game_Memory {
+		flags         = {},
 		is_debug_mode = true,
 		debug         = &d,
 		player        = player,
@@ -745,6 +798,7 @@ game_init :: proc() {
 		entities      = {
 			player,
 			new_random_projectile(0),
+			new_random_projectile(1),
 			// new_random_projectile(projectile_texture, 1),
 			// new_random_projectile(projectile_texture, 2),
 		},
