@@ -2,6 +2,7 @@
 #+feature dynamic-literals
 /*
 This file is the starting point of your game.
+ajsdhkfljakshdf
 
 Some important procedures are:
 - game_init_window: Opens the window
